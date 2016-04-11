@@ -19,5 +19,11 @@
   "bugs": {
     "url": "https://github.com/Jacques44/node-red-biglib/issues"
   },
-  "homepage": "https://github.com/Jacques44/node-red-biglib"
+  "homepage": "https://github.com/Jacques44/node-red-biglib",
+  "dependencies": {
+    "domain": "0.0.1",
+    "fs": "0.0.2",
+    "moment": "^2.12.0",
+    "stream": "0.0.2"
+  }
 }
