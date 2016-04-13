@@ -86,7 +86,7 @@ var rated_status = function(msg) {
 var control_rated_send = function(cb) {
   var now = Date.now();
   if (now - this.last_control_rated_send > this.runtime_control.config.control_rate || 0) {
-    this.node.send([undefined, cb()]);
+    this.node.send([ null, cb()]);
     this.last_control_rated_send = now;
   }
 }      
@@ -114,7 +114,7 @@ var on_finish = function(err) {
     this.node.status({fill: "green", shape: "dot", text: "done with " + this.progress() });
   }
 
-  this.node.send(["undef.end", { control: this.runtime_control }]);
+  this.node.send([ null, { control: this.runtime_control }]);
 
   this.running = false;
 
@@ -132,7 +132,7 @@ var on_start = function(config, control) {
   this.runtime_control.state = "start";  
   this.runtime_control.message = "running...";
 
-  this.node.send(["undef.start", { control: this.runtime_control }]);   
+  this.node.send([ null, { control: this.runtime_control }]);   
 
   this.running = true; 
 }
@@ -346,6 +346,10 @@ biglib.prototype.stream_full_file = function(msg) {
 
     var r = new stream.Readable();
 
+    r._read = function() {
+
+    }
+
     fs.readFile(my_config.filename, my_config.encoding || 'utf8', (function(err, data) {
       if (err) throw err;
       console.log("Giving the data " + data);
@@ -373,10 +377,15 @@ biglib.prototype.stream_full_file_string = function(msg) {
 
     var r = new stream.Readable();
 
+    r._read = function() {
+      
+    }    
+
     fs.readFile(my_config.filename, my_config.encoding || 'utf8', (function(err, data) {
       if (err) throw err;
       console.log("Giving the data string " + data);
       this.push(data.toString());
+      this.push(new Buffer("ABC", "utf8"));
       this.push(null);
     }).bind(r));
 
@@ -405,7 +414,7 @@ biglib.prototype.stream_data_blocks = function() {
 
     if (msg.control && msg.control.state == "error") {
       this.log("resending error message");
-      this.node.send(["undef.error", msg]);
+      this.node.send([ null, msg]);
       return;
     }
 
