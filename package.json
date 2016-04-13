@@ -21,8 +21,11 @@
   },
   "homepage": "https://github.com/Jacques44/node-red-biglib",
   "dependencies": {
+    "caller-id": "^0.1.0",
     "domain": "0.0.1",
+    "filesize": "^3.2.1",
     "fs": "0.0.2",
+    "line-by-line": "^0.1.4",
     "moment": "^2.12.0",
     "stream": "0.0.2"
   }
