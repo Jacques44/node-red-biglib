@@ -6,7 +6,7 @@ var stream = require('stream');
 var moment = require('moment');
 var filesize = require('filesize');
 var callerId = require('caller-id');
-var lineByLine = require('line-by-line');
+var byline = require('byline');
 const assert = require('assert');
 
 'use strict';
@@ -138,16 +138,20 @@ var on_start = function(config, control) {
 }
 
 var out_stream = function(my_config) {
+
+  var format = function(data) { return data }
+  if (my_config.format) {
+    format = function(data) { return data.toString(my_config.format) }
+  }
+
   // 2. Sender
   var outstream = new stream.Transform({ objectMode: true });
   outstream._transform = (function(data, encoding, done) {
 
     rated_status.call(this, {fill: "blue", shape: "dot", text: "sending... " + this.progress() + " so far"});
 
-    console.log("Sending datum " + data);
-
     // #1 big node principle: send blocks for big files management
-    this.node.send([{ payload: data }]);
+    this.node.send([{ payload: format(data) }]);
 
     done();
   }).bind(this);      
@@ -307,11 +311,14 @@ biglib.prototype.stream_file_blocks = function() {
 
 }();
 
+// 
+// Helper function to pick only necessary properties
+//
 var extract_config = function(given_config, expected_keys) {
   var out_config = {};
-  expected_keys = Array.isArray(expected_keys) || [ expected_keys ];
+  expected_keys = Array.isArray(expected_keys) ? expected_keys : [ expected_keys ];
   for (i in expected_keys) {
-    if (given_config[expected_keys[i]]) out_config[expected_keys[i]] = given_config[expected_keys[i]];
+    if (given_config.hasOwnProperty(expected_keys[i])) out_config[expected_keys[i]] = given_config[expected_keys[i]];
   }
   return out_config;
 }
@@ -319,14 +326,17 @@ var extract_config = function(given_config, expected_keys) {
 //
 // input message: filename
 // output messages: data blocks (n blocks)
+// Documentation: https://www.npmjs.com/package/line-by-line
 //
-biglib.prototype.stream_data_lines = function() {
+biglib.prototype.stream_data_lines = function(my_config) {
 
   var input_stream = function(my_config) {
 
-    var config_options = [ "encoding", "skipEmptyLines", "start", "end" ];
+    // Documentation: https://nodejs.org/api/fs.html#fs_fs_createreadstream_path_options
+    var config_options = [ "encoding", "keepEmptyLines" ];
+    var config = extract_config(my_config, config_options);
 
-    return new lineByLine(my_config.filename, extract_config(my_config, config_options));
+    return byline.createStream(fs.createReadStream(my_config.filename, config), config);
   }
 
   var input = stream_file_names(input_stream);
@@ -346,46 +356,12 @@ biglib.prototype.stream_full_file = function(msg) {
 
     var r = new stream.Readable();
 
-    r._read = function() {
-
-    }
+    // Avoid Error: not implemented error message
+    r._read = function() {}    
 
     fs.readFile(my_config.filename, my_config.encoding || 'utf8', (function(err, data) {
       if (err) throw err;
-      console.log("Giving the data " + data);
       this.push(data);
-      this.push(null);
-    }).bind(r));
-
-    return r;
-  }
-
-  var input = stream_file_names(input_stream);
-
-  return function(msg) {
-    return input.call(this, msg); 
-  }
-
-}();
-
-//
-// input message: filename
-// output message: file content (1 message)
-biglib.prototype.stream_full_file_string = function(msg) {
-
-  var input_stream = function(my_config) {
-
-    var r = new stream.Readable();
-
-    r._read = function() {
-      
-    }    
-
-    fs.readFile(my_config.filename, my_config.encoding || 'utf8', (function(err, data) {
-      if (err) throw err;
-      console.log("Giving the data string " + data);
-      this.push(data.toString());
-      this.push(new Buffer("ABC", "utf8"));
       this.push(null);
     }).bind(r));
 
