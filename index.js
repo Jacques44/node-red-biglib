@@ -9,12 +9,17 @@ var callerId = require('caller-id');
 var byline = require('byline');
 const assert = require('assert');
 
+const line_options = { "encoding": 'utf8', "keepEmptyLines": true };
+const file_options = { "encoding": 'utf8' };
+
 'use strict';
 
 function biglib(obj) {
 
 	this.def_config = Object.assign({}, validate_config(obj.config));
-	this.parser_stream = obj.parser;
+
+  set_parser.call(this, obj.parser);
+
 	this.node = obj.node;
 
   this.stack = [];
@@ -25,6 +30,8 @@ function biglib(obj) {
   delete this.def_config.x;
   delete this.def_config.y;
   delete this.def_config.z;   
+
+  this._blockMode = false;
 
   this.progress = function () { 
     switch (obj.status || 'filesize') {
@@ -44,6 +51,29 @@ function biglib(obj) {
 	}	
 }
 
+biglib.prototype.block_mode = function(msg) {
+  if (!msg.control) return this._blockMode;
+  if (msg.control.state == 'start') {
+    this._blockMode = true;
+  }
+  else if (msg.control.state == 'end' || msg.control.state == 'error') {
+    this._blockMode = false;
+  }
+  return this._blockMode;
+}
+
+var set_parser = function(parser) {
+  try {
+    if (parser) this.parser_stream = function (myconfig) { 
+      return new byline.LineStream(extract_config(myconfig, line_options)) 
+    }
+    else this.parser_stream = parser;
+  } catch (err) {
+    console.log(err.message);
+    throw err;
+  }  
+}
+
 var validate_config = function(config) {
   config.checkpoint = config.checkpoint || 100;   
   config.status_rate = config.status_rate || 1000;
@@ -54,7 +84,6 @@ var validate_config = function(config) {
 
 biglib.prototype.new_config = function(config) {
 	if (! config) config = Object.assign({}, this.def_config);
-  console.log(config);
 	return validate_config(config);
 }
 
@@ -145,7 +174,7 @@ var out_stream = function(my_config) {
   }
 
   // 2. Sender
-  var outstream = new stream.Transform({ objectMode: true });
+  var outstream = new stream.Transform( { objectMode: true });
   outstream._transform = (function(data, encoding, done) {
 
     rated_status.call(this, {fill: "blue", shape: "dot", text: "sending... " + this.progress() + " so far"});
@@ -168,6 +197,9 @@ biglib.prototype.create_stream = function(msg, in_streams, last) {
   var output;
 
   assert(this.runtime_control, "create_stream, no runtime_control");
+
+  this.log("");
+  console.log(this.parser_stream);
 
   // Error management using domain
   // Everything linked together with error management
@@ -316,9 +348,19 @@ biglib.prototype.stream_file_blocks = function() {
 //
 var extract_config = function(given_config, expected_keys) {
   var out_config = {};
-  expected_keys = Array.isArray(expected_keys) ? expected_keys : [ expected_keys ];
+  expected_keys = 
+    Array.isArray(expected_keys) ? expected_keys : ( 
+      typeof expected_keys == 'objet' ? Object.keys(expected_keys) : 
+      [ expected_keys ]
+    );
+
   for (i in expected_keys) {
-    if (given_config.hasOwnProperty(expected_keys[i])) out_config[expected_keys[i]] = given_config[expected_keys[i]];
+    if (given_config.hasOwnProperty(expected_keys[i])) {
+      out_config[expected_keys[i]] = given_config[expected_keys[i]];
+    } else {
+      if (expected_keys.hasOwnProperty(expected_keys[i]))
+          out_config[expected_keys[i]] = expected_keys[expected_keys[i]];
+    }
   }
   return out_config;
 }
@@ -332,11 +374,12 @@ biglib.prototype.stream_data_lines = function(my_config) {
 
   var input_stream = function(my_config) {
 
-    // Documentation: https://nodejs.org/api/fs.html#fs_fs_createreadstream_path_options
-    var config_options = [ "encoding", "keepEmptyLines" ];
-    var config = extract_config(my_config, config_options);
+    set_parser.call(this, 'line');
 
-    return byline.createStream(fs.createReadStream(my_config.filename, config), config);
+    // Documentation: https://nodejs.org/api/fs.html#fs_fs_createreadstream_path_options
+    var config_file = extract_config(my_config, file_options);
+
+    return fs.createReadStream(my_config.filename, config_file.encoding);
   }
 
   var input = stream_file_names(input_stream);
