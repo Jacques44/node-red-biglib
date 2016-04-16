@@ -10,7 +10,10 @@ var byline = require('byline');
 const assert = require('assert');
 
 const line_options = { "encoding": 'utf8', "keepEmptyLines": true };
-const file_options = { "encoding": 'utf8' };
+const file_options = { 
+  "encoding": 'utf8', start: undefined, end: undefined, 
+  "bufferSize": { default: 64, validation: function(v) { return v*1024 } }
+}
 
 'use strict';
 
@@ -18,7 +21,7 @@ function biglib(obj) {
 
 	this.def_config = Object.assign({}, validate_config(obj.config));
 
-  set_parser.call(this, obj.parser);
+  set_parser.call(this, obj.parser, obj.parser_config);
 
 	this.node = obj.node;
 
@@ -32,6 +35,7 @@ function biglib(obj) {
   delete this.def_config.z;   
 
   this._blockMode = false;
+  this.running = false;
 
   this.progress = function () { 
     switch (obj.status || 'filesize') {
@@ -51,23 +55,40 @@ function biglib(obj) {
 	}	
 }
 
-biglib.prototype.block_mode = function(msg) {
-  if (!msg.control) return this._blockMode;
+biglib.prototype.message_type = function(msg) {
+  if (! msg.control) return this._blockMode ? 'block' : 'filename';
+
   if (msg.control.state == 'start') {
     this._blockMode = true;
   }
   else if (msg.control.state == 'end' || msg.control.state == 'error') {
     this._blockMode = false;
   }
+
+  return 'control';
+}
+
+//
+// Return true if in block flow mode
+// otherwise, msg contains a filename
+biglib.prototype.block_mode = function(msg) {
   return this._blockMode;
 }
 
-var set_parser = function(parser) {
+//
+// Each node using this library may work in "file" mode
+var set_parser = function(parser, parser_config) {
   try {
-    if (parser) this.parser_stream = function (myconfig) { 
-      return new byline.LineStream(extract_config(myconfig, line_options)) 
+    if (parser == 'line') {
+      this.parser_stream = function (myconfig) { 
+        return new byline.LineStream(myconfig);
+      }
+      this.parser_config = line_options;
     }
-    else this.parser_stream = parser;
+    else {
+      this.parser_stream = parser;
+      this.parser_config = parser_config;
+    }
   } catch (err) {
     console.log(err.message);
     throw err;
@@ -87,15 +108,61 @@ biglib.prototype.new_config = function(config) {
 	return validate_config(config);
 }
 
-var running = false;
+// 
+// Helper function to pick only necessary properties
+//
+var extract_config = function(given_config, expected_keys) {
+
+  try {
+    var out_config = {};
+    keys = 
+      Array.isArray(expected_keys) ? expected_keys : ( 
+        typeof expected_keys == 'object' ? Object.keys(expected_keys) : 
+        [ expected_keys ]
+      );
+
+    for (i in keys) {
+      var name = keys[i];
+      var def = expected_keys[name];
+      var validate = false;
+
+      // If this expected configuration key is given, take it
+      if (given_config.hasOwnProperty(name)) {
+        out_config[name] = given_config[name];
+        validate = true;
+      } else {
+        // Default value?
+        if (expected_keys.hasOwnProperty(name)) {
+          if (typeof def == 'object') {
+            if (def.default) {
+              out_config[name] = def.default; 
+              validate = true;
+            }
+          } else {
+            out_config[name] = def;
+            validate = true;
+          }
+        }
+      }
+
+      if (validate && def && def.validation) {
+        out_config[name] = def.validation(out_config[name]);
+      }
+
+    }
+    return out_config;
+  } catch (err) {
+    console.log(err);
+    throw err;
+  }
+}
 
 // Require stream to close
 var close_stream = function(input) {
   if (input) {
-    this.log("closing input stream");
     input.end();
   } else {
-    this.log("damn, no input stream to close");
+    //this.log("damn, no input stream to close");
   }
   return;
 }
@@ -123,7 +190,7 @@ var control_rated_send = function(cb) {
 
 biglib.prototype.log = function(msg) {
   var caller = callerId.getData();
-  console.log("[" + this.node.constructor.name + "@" + caller.functionName + "] " + msg);
+  console.log("[" + this.node.constructor.name + "@" + caller.functionName + "] " + JSON.stringify(msg, null, 2));
 }
 
 // Principe #2, end message on output #2
@@ -198,9 +265,6 @@ biglib.prototype.create_stream = function(msg, in_streams, last) {
 
   assert(this.runtime_control, "create_stream, no runtime_control");
 
-  this.log("");
-  console.log(this.parser_stream);
-
   // Error management using domain
   // Everything linked together with error management
   // Cf documentation
@@ -216,7 +280,12 @@ biglib.prototype.create_stream = function(msg, in_streams, last) {
         output = output.pipe(s.call(this, my_config));
       }).bind(this));
 
-      if (this.parser_stream) output = output.pipe(this.parser_stream(my_config)).pipe(record_stream.call(this, my_config));
+      if (this.parser_stream) {
+
+        output = output
+          .pipe(this.parser_stream(extract_config(my_config, this.parser_config)))
+          .pipe(record_stream.call(this, my_config));
+      }
 
       output = output.pipe(out_stream.call(this, my_config));
 
@@ -328,8 +397,7 @@ biglib.prototype.stream_file_blocks = function() {
   var input_stream = function(my_config) {
 
     // Documentation: https://nodejs.org/api/fs.html#fs_fs_createreadstream_path_options
-    var config_options = [ "encoding", "start", "end", "bufferSize" ];
-    var config = extract_config(my_config, config_options);
+    var config = extract_config(my_config, file_options);
     if (config.bufferSize) config.bufferSize *= 1024;
 
     return fs.createReadStream(my_config.filename, config);
@@ -342,28 +410,6 @@ biglib.prototype.stream_file_blocks = function() {
   }
 
 }();
-
-// 
-// Helper function to pick only necessary properties
-//
-var extract_config = function(given_config, expected_keys) {
-  var out_config = {};
-  expected_keys = 
-    Array.isArray(expected_keys) ? expected_keys : ( 
-      typeof expected_keys == 'objet' ? Object.keys(expected_keys) : 
-      [ expected_keys ]
-    );
-
-  for (i in expected_keys) {
-    if (given_config.hasOwnProperty(expected_keys[i])) {
-      out_config[expected_keys[i]] = given_config[expected_keys[i]];
-    } else {
-      if (expected_keys.hasOwnProperty(expected_keys[i]))
-          out_config[expected_keys[i]] = expected_keys[expected_keys[i]];
-    }
-  }
-  return out_config;
-}
 
 //
 // input message: filename
@@ -453,8 +499,6 @@ biglib.prototype.stream_data_blocks = function() {
     }
 
     if (msg.control && msg.control.state == "end") {
-      this.log("received end message");
-
       this.runtime_control.control = msg.control;    // Parent control message
 
       input_stream = close_stream.call(this, input_stream);
@@ -467,6 +511,23 @@ biglib.prototype.config = function() {
 	return this.runtime_control.config;
 }
 
+biglib.prototype.main = function(msg) {
+
+  switch (this.message_type(msg)) {
+
+    case 'block': 
+    case 'control':
+      this.stream_data_blocks(msg);     
+      break;
+
+    case 'filename': 
+      msg.config = this.new_config(msg.config);
+
+      msg.config.filename = msg.config.filename || msg.filename || msg.payload;
+      this.stream_file_blocks(msg);
+      break;
+  }  
+}
 
 module.exports = biglib;
 

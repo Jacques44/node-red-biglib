@@ -2,7 +2,7 @@
   "name": "node-red-biglib",
   "version": "1.0.0",
   "description": "library for building node-red flows that supports blocks, high volume",
-  "main": "index.js",
+  "main": "biglib.js",
   "scripts": {
     "test": "echo \"Error: no test specified\" && exit 1"
   },
@@ -26,7 +26,6 @@
     "domain": "0.0.1",
     "filesize": "^3.2.1",
     "fs": "0.0.2",
-    "line-by-line": "^0.1.4",
     "moment": "^2.12.0",
     "stream": "0.0.2"
   }
