@@ -1,4 +1,33 @@
+/*
+  Copyright (c) 2016 Jacques W.
 
+  Licensed under the Apache License, Version 2.0 (the "License");
+  you may not use this file except in compliance with the License.
+  You may obtain a copy of the License at
+
+  http://www.apache.org/licenses/LICENSE-2.0
+
+  Unless required by applicable law or agreed to in writing, software
+  distributed under the License is distributed on an "AS IS" BASIS,
+  WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+  See the License for the specific language governing permissions and
+  limitations under the License.
+
+  This a Blue Node!
+
+  /\/\/\/\/\/\/\/\/\/\/\/\/\/\/\/\/\/\/\/\/\/\/\/\/\/\/\/\/\/\/\
+ 
+   Big Nodes principles:
+ 
+   #1 can handle big data
+   #2 send status messages on a second output (start, end, running, error)
+   #3 visually tell what they are doing (blue: ready/running, green: ok/done, error)
+
+   Any issues? https://github.com/Jacques44
+ 
+  /\/\/\/\/\/\/\/\/\/\/\/\/\/\/\/\/\/\/\/\/\/\/\/\/\/\/\/\/\/\/\
+
+*/
 
 var fs = require('fs');
 var domain = require('domain');
@@ -12,7 +41,7 @@ const assert = require('assert');
 const line_options = { "encoding": 'utf8', "keepEmptyLines": true };
 const file_options = { 
   "encoding": 'utf8', start: undefined, end: undefined, 
-  "bufferSize": { default: 64, validation: function(v) { return v*1024 } }
+  "highWaterMark": { default: 64, validation: function(v) { return v*1024 } }
 }
 
 'use strict';
@@ -53,6 +82,8 @@ function biglib(obj) {
 	this.runtime_control = {
 		  config: Object.assign({}, this.def_config)
 	}	
+
+  ready.call(this);
 }
 
 biglib.prototype.message_type = function(msg) {
@@ -398,7 +429,6 @@ biglib.prototype.stream_file_blocks = function() {
 
     // Documentation: https://nodejs.org/api/fs.html#fs_fs_createreadstream_path_options
     var config = extract_config(my_config, file_options);
-    if (config.bufferSize) config.bufferSize *= 1024;
 
     return fs.createReadStream(my_config.filename, config);
   }
@@ -448,7 +478,9 @@ biglib.prototype.stream_full_file = function(msg) {
     // Avoid Error: not implemented error message
     r._read = function() {}    
 
-    fs.readFile(my_config.filename, my_config.encoding || 'utf8', (function(err, data) {
+    var config = extract_config(my_config, file_options);
+
+    fs.readFile(my_config.filename, config, (function(err, data) {
       if (err) throw err;
       this.push(data);
       this.push(null);
@@ -483,7 +515,7 @@ biglib.prototype.stream_data_blocks = function() {
       return;
     }
 
-    if (msg.control && msg.control.state == "start") {
+    if (msg.control && (msg.control.state == "start" || msg.control.state == "standalone")) {
 
       input_stream = close_stream.call(this, input_stream);
 
@@ -498,7 +530,7 @@ biglib.prototype.stream_data_blocks = function() {
       input_stream.write(msg.payload);
     }
 
-    if (msg.control && msg.control.state == "end") {
+    if (msg.control && (msg.control.state == "end" || msg.control.state == "standalone")) {
       this.runtime_control.control = msg.control;    // Parent control message
 
       input_stream = close_stream.call(this, input_stream);
