@@ -48,42 +48,42 @@ const file_options = {
 
 function biglib(obj) {
 
-	this.def_config = Object.assign({}, validate_config(obj.config));
+	this._def_config = Object.assign({}, this._validate_config(obj.config));
 
-  set_parser.call(this, obj.parser, obj.parser_config);
+  this._set_parser(obj.parser, obj.parser_config);
 
-	this.node = obj.node;
+	this._node = obj.node;
 
-  this.stack = [];
-  this.last_rated_status = new Date();
-  this.last_control_rated_send = new Date();
+  this._stack = [];
+  this._last_rated_status = new Date();
+  this._last_control_rated_send = new Date();
 
-  delete this.def_config.wires;
-  delete this.def_config.x;
-  delete this.def_config.y;
-  delete this.def_config.z;   
+  delete this._def_config.wires;
+  delete this._def_config.x;
+  delete this._def_config.y;
+  delete this._def_config.z;   
 
   this._blockMode = false;
-  this.running = false;
+  this._running = false;
 
   this.progress = function () { 
     switch (obj.status || 'filesize') {
       case 'filesize':
-        return function() { return filesize(this.runtime_control.size) }
+        return function() { return filesize(this._runtime_control.size) }
         break;
       case 'records': 
-        return function() { return this.runtime_control.records + " records" }
+        return function() { return this._runtime_control.records + " records" }
         break;
       default:
         return function() { return "..." }
     }
   }();
 
-	this.runtime_control = {
-		  config: Object.assign({}, this.def_config)
+	this._runtime_control = {
+		  config: Object.assign({}, this._def_config)
 	}	
 
-  ready.call(this);
+  this._ready();
 }
 
 biglib.prototype.message_type = function(msg) {
@@ -108,7 +108,7 @@ biglib.prototype.block_mode = function(msg) {
 
 //
 // Each node using this library may work in "file" mode
-var set_parser = function(parser, parser_config) {
+biglib.prototype._set_parser = function(parser, parser_config) {
   try {
     if (parser == 'line') {
       this.parser_stream = function (myconfig) { 
@@ -126,7 +126,7 @@ var set_parser = function(parser, parser_config) {
   }  
 }
 
-var validate_config = function(config) {
+biglib.prototype._validate_config = function(config) {
   config.checkpoint = config.checkpoint || 100;   
   config.status_rate = config.status_rate || 1000;
   config.control_rate = config.control_rate || 1000;
@@ -135,14 +135,14 @@ var validate_config = function(config) {
 }
 
 biglib.prototype.new_config = function(config) {
-	if (! config) config = Object.assign({}, this.def_config);
-	return validate_config(config);
+	if (! config) config = Object.assign({}, this._def_config);
+	return this._validate_config(config);
 }
 
 // 
 // Helper function to pick only necessary properties
 //
-var extract_config = function(given_config, expected_keys) {
+biglib.prototype._extract_config = function(given_config, expected_keys) {
 
   try {
     var out_config = {};
@@ -189,7 +189,7 @@ var extract_config = function(given_config, expected_keys) {
 }
 
 // Require stream to close
-var close_stream = function(input) {
+biglib.prototype._close_stream = function(input) {
   if (input) {
     input.end();
   } else {
@@ -198,73 +198,76 @@ var close_stream = function(input) {
   return;
 }
 
-var ready = function() {
-  this.node.status({fill: "blue", shape: "dot", text: "ready !"});
+biglib.prototype._ready = function() {
+  this._node.status({fill: "blue", shape: "dot", text: "ready !"});
 }
 
-var rated_status = function(msg) {
+biglib.prototype._rated_status = function(msg) {
   var now = Date.now();
-  if (now - this.last_rated_status > this.runtime_control.config.status_rate || 0) {
-    this.node.status(msg);
-    this.last_rated_status = now;
+  if (now - this._last_rated_status > this._runtime_control.config.status_rate || 0) {
+    this._node.status(msg);
+    this._last_rated_status = now;
   }
 }
 
-var control_rated_send = function(cb) {
+biglib.prototype._control_rated_send = function(cb) {
   var now = Date.now();
-  if (now - this.last_control_rated_send > this.runtime_control.config.control_rate || 0) {
-    this.node.send([ null, cb()]);
-    this.last_control_rated_send = now;
+  if (now - this._last_control_rated_send > this._runtime_control.config.control_rate || 0) {
+    this._node.send([ null, cb()]);
+    this._last_control_rated_send = now;
   }
 }      
 
 
 biglib.prototype.log = function(msg) {
   var caller = callerId.getData();
-  console.log("[" + this.node.constructor.name + "@" + caller.functionName + "] " + JSON.stringify(msg, null, 2));
+  console.log("[" + this._node.constructor.name + "@" + caller.functionName + "] " + JSON.stringify(msg, null, 2));
 }
 
 // Principe #2, end message on output #2
-var on_finish = function(err) {
+biglib.prototype._on_finish = function(err) {
 
-  this.runtime_control.state = "end";
-  this.runtime_control.message = "success";
-  this.runtime_control.end = new Date();
-  this.runtime_control.speed = 0;
+  this._runtime_control.state = "end";
+  this._runtime_control.message = "success";
+  this._runtime_control.end = new Date();
+  this._runtime_control.speed = 0;
+
+  err = err || this._err;
+  delete this._err;
 
   if (err) {
-    this.runtime_control.state = "error";
-    this.runtime_control.error = err;
-    this.runtime_control.message = err.message;
-    this.node.status({fill: "red", shape: "dot", text: err.message });
+    this._runtime_control.state = "error";
+    this._runtime_control.error = err;
+    this._runtime_control.message = err.message;
+    this._node.status({fill: "red", shape: "dot", text: err.message });
   } else {
-    this.node.status({fill: "green", shape: "dot", text: "done with " + this.progress() });
+    this._node.status({fill: "green", shape: "dot", text: "done with " + this.progress() });
   }
 
-  this.node.send([ null, { control: this.runtime_control }]);
+  this._node.send([ null, { control: this._runtime_control }]);
 
-  this.running = false;
+  this._running = false;
 
-  if (err) this.node.error(err);
+  if (err) this._node.error(err);
 }
 
-var on_start = function(config, control) {
+biglib.prototype._on_start = function(config, control) {
 
-  this.runtime_control.records = this.runtime_control.size = 0;
-  this.runtime_control.start = new Date();
-  this.runtime_control.speed = 0;
-  this.runtime_control.control = control;  // parent control message
-  this.runtime_control.config = config;
-  delete this.runtime_control.end;
-  this.runtime_control.state = "start";  
-  this.runtime_control.message = "running...";
+  this._runtime_control.records = this._runtime_control.size = 0;
+  this._runtime_control.start = new Date();
+  this._runtime_control.speed = 0;
+  this._runtime_control.control = control;  // parent control message
+  this._runtime_control.config = config;
+  delete this._runtime_control.end;
+  this._runtime_control.state = "start";  
+  this._runtime_control.message = "running...";
 
-  this.node.send([ null, { control: this.runtime_control }]);   
+  this._node.send([ null, { control: this._runtime_control }]);   
 
-  this.running = true; 
+  this._running = true; 
 }
 
-var out_stream = function(my_config) {
+biglib.prototype._out_stream = function(my_config) {
 
   var format = function(data) { return data }
   if (my_config.format) {
@@ -275,10 +278,10 @@ var out_stream = function(my_config) {
   var outstream = new stream.Transform( { objectMode: true });
   outstream._transform = (function(data, encoding, done) {
 
-    rated_status.call(this, {fill: "blue", shape: "dot", text: "sending... " + this.progress() + " so far"});
+    this._rated_status({fill: "blue", shape: "dot", text: "sending... " + this.progress() + " so far"});
 
     // #1 big node principle: send blocks for big files management
-    this.node.send([{ payload: format(data) }]);
+    this._node.send([{ payload: format(data) }]);
 
     done();
   }).bind(this);      
@@ -289,12 +292,12 @@ var out_stream = function(my_config) {
 // control is an incoming control message { control: {}, config: {} }
 biglib.prototype.create_stream = function(msg, in_streams, last) {
 
-  var my_config = (msg || {}).config || this.def_config;
+  var my_config = (msg || {}).config || this._def_config;
 
   var input;
   var output;
 
-  assert(this.runtime_control, "create_stream, no runtime_control");
+  assert(this._runtime_control, "create_stream, no runtime_control");
 
   // Error management using domain
   // Everything linked together with error management
@@ -302,7 +305,7 @@ biglib.prototype.create_stream = function(msg, in_streams, last) {
   // Run the supplied function in the context of the domain, implicitly binding all event emitters, timers, and lowlevel requests that are created in that context
   domain.create()
 
-    .on('error', on_finish.bind(this))
+    .on('error', this._on_finish.bind(this))
 
     .run((function() {
       output = input = in_streams.shift().call(this, my_config);
@@ -314,46 +317,46 @@ biglib.prototype.create_stream = function(msg, in_streams, last) {
       if (this.parser_stream) {
 
         output = output
-          .pipe(this.parser_stream(extract_config(my_config, this.parser_config)))
-          .pipe(record_stream.call(this, my_config));
+          .pipe(this.parser_stream(this._extract_config(my_config, this.parser_config)))
+          .pipe(this._record_stream(my_config));
       }
 
-      output = output.pipe(out_stream.call(this, my_config));
+      output = output.pipe(this._out_stream(my_config));
 
-      output.on('finish', on_finish.bind(this));
+      output.on('finish', this._on_finish.bind(this));
 
     }).bind(this));
 
   // Big node status and statistics
-  on_start.call(this, my_config, msg.control);
+  this._on_start(my_config, msg.control);
 
   // Return is the entry point for incoming data
   return { input: input, output: output };
 }
 
-var speed_message = function() {
-  var duration = moment.duration(moment().diff(this.runtime_control.start, 'seconds'));
+biglib.prototype._speed_message = function() {
+  var duration = moment.duration(moment().diff(this._runtime_control.start, 'seconds'));
 
   if (duration > 0) {         
-    this.runtime_control.speed = this.runtime_control.size / duration;
-    this.runtime_control.state = 'running';
-    return { control: this.runtime_control };
+    this._runtime_control.speed = this._runtime_control.size / duration;
+    this._runtime_control.state = 'running';
+    return { control: this._runtime_control };
   }      
 }
 
-var size_stream = function(my_config) {
+biglib.prototype._size_stream = function(my_config) {
 
   var biglib = this;
-  assert(biglib.runtime_control, "size_stream, pas de runtime_control");
+  assert(biglib._runtime_control, "size_stream, pas de runtime_control");
 
   // Streams are created in the scope of domain (very very important)
   var size_stream = new stream.Transform({ objectMode: true });
   size_stream._transform = (function(data, encoding, done) {
-    biglib.runtime_control.size += data.length;
+    biglib._runtime_control.size += data.length;
 
     this.push(data);
 
-    control_rated_send.call(biglib, (speed_message).bind(biglib));
+    biglib._control_rated_send((biglib._speed_message).bind(biglib));
 
     done();
   });
@@ -361,19 +364,19 @@ var size_stream = function(my_config) {
   return size_stream;
 }
 
-var record_stream = function(my_config) {
+biglib.prototype._record_stream = function(my_config) {
 
   var biglib = this;
-  assert(biglib.runtime_control, "record_stream, pas de runtime_control");
+  assert(biglib._runtime_control, "record_stream, pas de runtime_control");
 
   // Streams are created in the scope of domain (very very important)
   var record_stream = new stream.Transform({ objectMode: true });
   record_stream._transform = (function(data, encoding, done) {
-    biglib.runtime_control.records++;
+    biglib._runtime_control.records++;
 
     this.push(data);
 
-    control_rated_send.call(biglib, (speed_message).bind(biglib));
+    biglib._control_rated_send((biglib._speed_message).bind(biglib));
 
     done();
   });
@@ -381,65 +384,48 @@ var record_stream = function(my_config) {
   return record_stream;
 }
 
-//
-// private function
-// build a stream from a file either as blocks or full content
-// manages a stack of filenames
-//
-var stream_file_names = function() {
+biglib.prototype._enqueue = function(msg, input_stream) {
 
-  return (function(arg_stream) {
+  console.log("Pushing...");
 
-    return (function(msg) {
+  var next = (function() {
+    var elt = this._stack.pop();
+    if (elt) {
+      this.log("Running next in queue");
+      create(elt.msg, elt.input_stream);
+    }
+  }).bind(this);
 
-      var next = (function() {
-        var msg = this.stack.pop();
-        if (msg) {
-          this.log("next in the queue");
-          create(msg);
-        }
-      }).bind(this);
+  var create = (function(msg, input_stream) {
+    var s = []; if (input_stream) s.push(input_stream);
+    s.push(this._size_stream);
+    this.create_stream(msg, s).output.on('finish', next);
+  }).bind(this);
 
-      var create = (function(msg) {
-        var s = []; if (arg_stream) s.push(arg_stream);
-        s.push(size_stream);
-        this.create_stream(msg, s).output.on('finish', next);
-      }).bind(this);
+  if (this._running) {
+    this._stack.push({ msg: msg, input_stream: input_stream });
+  } else {
+    create(msg, input_stream);
+  }
 
-      if (this.running) { 
-      	this.log("Already running, push...");
-        this.stack.push(msg);
-      } else {
-        create(msg);
-      }
-
-    }); 
-
-  });
-
-}();
+}
 
 //
 // input message: filename
 // output messages: data blocks (n blocks)
 //
-biglib.prototype.stream_file_blocks = function() {
+biglib.prototype.stream_file_blocks = function(msg) {
 
   var input_stream = function(my_config) {
 
     // Documentation: https://nodejs.org/api/fs.html#fs_fs_createreadstream_path_options
-    var config = extract_config(my_config, file_options);
+    var config = this._extract_config(my_config, file_options);
 
     return fs.createReadStream(my_config.filename, config);
   }
 
-  var input = stream_file_names(input_stream);
-
-  return function(msg) {
-    return input.call(this, msg); 
-  }
-
-}();
+  this._enqueue(msg, input_stream);
+};
 
 //
 // input message: filename
@@ -450,21 +436,16 @@ biglib.prototype.stream_data_lines = function(my_config) {
 
   var input_stream = function(my_config) {
 
-    set_parser.call(this, 'line');
+    this._set_parser('line');
 
     // Documentation: https://nodejs.org/api/fs.html#fs_fs_createreadstream_path_options
-    var config_file = extract_config(my_config, file_options);
+    var config_file = this._extract_config(my_config, file_options);
 
     return fs.createReadStream(my_config.filename, config_file.encoding);
   }
 
-  var input = stream_file_names(input_stream);
-
-  return function(msg) {
-    return input.call(this, msg); 
-  }
-
-}();
+  this._enqueue(msg, input_stream);
+};
 
 //
 // input message: filename
@@ -478,7 +459,7 @@ biglib.prototype.stream_full_file = function(msg) {
     // Avoid Error: not implemented error message
     r._read = function() {}    
 
-    var config = extract_config(my_config, file_options);
+    var config = this._extract_config(my_config, file_options);
 
     fs.readFile(my_config.filename, config, (function(err, data) {
       if (err) throw err;
@@ -489,13 +470,8 @@ biglib.prototype.stream_full_file = function(msg) {
     return r;
   }
 
-  var input = stream_file_names(input_stream);
-
-  return function(msg) {
-    return input.call(this, msg); 
-  }
-
-}();
+  this._enqueue(msg, input_stream);
+};
 
 //
 // input: data blocks
@@ -503,44 +479,41 @@ biglib.prototype.stream_full_file = function(msg) {
 // acts as a transform stream
 // manages start, end control messages
 //
-biglib.prototype.stream_data_blocks = function() {
+biglib.prototype.stream_data_blocks = function(msg) {
 
-  var input_stream;
+  if (msg.control && (msg.control.state == "start" || msg.control.state == "standalone")) {
 
-  return (function(msg) {
+    this._input_stream = this._close_stream(this._input_stream);
 
-    if (msg.control && msg.control.state == "error") {
-      this.log("resending error message");
-      this.node.send([ null, msg]);
-      return;
-    }
+    this._ready();
 
-    if (msg.control && (msg.control.state == "start" || msg.control.state == "standalone")) {
+    if (msg.config) this._input_stream = this.create_stream(msg, [ this._size_stream ]).input;
+  }
 
-      input_stream = close_stream.call(this, input_stream);
+  if (msg.payload) {
+    if (! this._input_stream) this._input_stream = this.create_stream(msg, [ this._size_stream ]).input;
 
-      ready.call(this);
+    this._input_stream.write(msg.payload);
+  }
 
-      if (msg.config) input_stream = this.create_stream(msg, [ size_stream ]).input;
-    }
+  if (msg.control && (msg.control.state == "end" || msg.control.state == "standalone" || msg.control.state == "error")) {
 
-    if (msg.payload) {
-      if (! input_stream) input_stream = this.create_stream(msg, [ size_stream ]).input;
+    if (msg.control.state == "error") {
+      // Resend error message
+      console.log("resending error message");
+      this._node.send([ null, msg ]);
+      this._err = new Error(msg.control.error + " from upstream");
+    }    
 
-      input_stream.write(msg.payload);
-    }
+    this._runtime_control.control = msg.control;    // Parent control message
 
-    if (msg.control && (msg.control.state == "end" || msg.control.state == "standalone")) {
-      this.runtime_control.control = msg.control;    // Parent control message
+    this._input_stream = this._close_stream(this._input_stream);   
+  }
 
-      input_stream = close_stream.call(this, input_stream);
-    }
-  });
-
-}();
+}
 
 biglib.prototype.config = function() {
-	return this.runtime_control.config;
+	return this._runtime_control.config;
 }
 
 biglib.prototype.main = function(msg) {
