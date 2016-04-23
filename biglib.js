@@ -36,36 +36,67 @@ var moment = require('moment');
 var filesize = require('filesize');
 var callerId = require('caller-id');
 var byline = require('byline');
+var Client = require('ssh2').Client;
+const util = require('util');
 const assert = require('assert');
+
+const StatusTypeStream = "ring";
+const StatusTypeGenerator = "dot";
 
 const line_options = { "encoding": 'utf8', "keepEmptyLines": true };
 const file_options = { 
   "encoding": 'utf8', start: undefined, end: undefined, 
   "highWaterMark": { default: 64, validation: function(v) { return v*1024 } }
 }
+const ssh_options = {
+  "host": "", "port": 22, 
+  "privateKey": { default: "", validation: function(v) { return require('fs').readFileSync(v) } },
+  "username": "",
+  "commandLine": "",
+  "minError": 1
+}
+
+const data_generators = {
+  "filename": {
+
+  }
+}
 
 'use strict';
 
 function biglib(obj) {
 
+  // Clone the configuration
 	this._def_config = Object.assign({}, this._validate_config(obj.config));
 
+  // If node is configured as a parser, store the information
   this._set_parser(obj.parser, obj.parser_config);
 
+  // This is a library that uses the node methods (status, error, send) so we need a reference to the node instance
 	this._node = obj.node;
 
+  // This stack is used in case of multiple incoming "generator" messages. We don't want data from 2 files to be melt
   this._stack = [];
+
+  // These control the refresh rates for visual statuses and running control messages
   this._last_rated_status = new Date();
   this._last_control_rated_send = new Date();
 
+  // We don't care about internal node-red property for the nodes. I delete this because I have previously cloned the config
   delete this._def_config.wires;
   delete this._def_config.x;
   delete this._def_config.y;
   delete this._def_config.z;   
 
-  this._blockMode = false;
   this._running = false;
 
+  // this property tells the node can act as a data generator if defined in an incoming msg
+  this._generator = obj.generator || "";
+
+  // If the node is configured as a data generator, by default, its status will be of type generator (dot)
+  this._default_status_type = this._status_type = (this._generator && this._def_config[this._generator]) ? StatusTypeGenerator : StatusTypeStream;
+
+  // This function is used to show the running status of the node in a human form
   this.progress = function () { 
     switch (obj.status || 'filesize') {
       case 'filesize':
@@ -75,39 +106,23 @@ function biglib(obj) {
         return function() { return this._runtime_control.records + " records" }
         break;
       default:
+        if (typeof obj.status == "function") return obj.status;
         return function() { return "..." }
     }
   }();
 
+  // Property used to store running statistics. It's the control message
 	this._runtime_control = {
 		  config: Object.assign({}, this._def_config)
 	}	
 
+  // Show a blue ready message
   this._ready();
 }
 
-biglib.prototype.message_type = function(msg) {
-  if (! msg.control) return this._blockMode ? 'block' : 'filename';
-
-  if (msg.control.state == 'start') {
-    this._blockMode = true;
-  }
-  else if (msg.control.state == 'end' || msg.control.state == 'error') {
-    this._blockMode = false;
-  }
-
-  return 'control';
-}
-
 //
-// Return true if in block flow mode
-// otherwise, msg contains a filename
-biglib.prototype.block_mode = function(msg) {
-  return this._blockMode;
-}
-
+// If the node is a parser, configure it
 //
-// Each node using this library may work in "file" mode
 biglib.prototype._set_parser = function(parser, parser_config) {
   try {
     if (parser == 'line') {
@@ -126,21 +141,28 @@ biglib.prototype._set_parser = function(parser, parser_config) {
   }  
 }
 
+//
+// Local validation configuration method
+//
 biglib.prototype._validate_config = function(config) {
   config.checkpoint = config.checkpoint || 100;   
   config.status_rate = config.status_rate || 1000;
   config.control_rate = config.control_rate || 1000;
+  config.start_point_type = config.start_point_type || 'filename';
 
   return config;
 }
 
+//
+// Returns an instance of the configuration. Useful to avoid overlaps as nodes can be configured on the fly
+//
 biglib.prototype.new_config = function(config) {
 	if (! config) config = Object.assign({}, this._def_config);
 	return this._validate_config(config);
 }
 
 // 
-// Helper function to pick only necessary properties
+// Helper function to pick only necessary properties with needed defaults and validated
 //
 biglib.prototype._extract_config = function(given_config, expected_keys) {
 
@@ -199,7 +221,11 @@ biglib.prototype._close_stream = function(input) {
 }
 
 biglib.prototype._ready = function() {
-  this._node.status({fill: "blue", shape: "dot", text: "ready !"});
+  this._node.status({fill: "blue", shape: this._status_type, text: "ready !"});
+}
+
+biglib.prototype._working = function(text) {
+  this._node.status({fill: "blue", shape: this._status_type, text: text});
 }
 
 biglib.prototype._rated_status = function(msg) {
@@ -218,13 +244,17 @@ biglib.prototype._control_rated_send = function(cb) {
   }
 }      
 
-
+//
+// Local log function
+//
 biglib.prototype.log = function(msg) {
   var caller = callerId.getData();
   console.log("[" + this._node.constructor.name + "@" + caller.functionName + "] " + JSON.stringify(msg, null, 2));
 }
 
-// Principe #2, end message on output #2
+//
+// Callback when the job is done
+//
 biglib.prototype._on_finish = function(err) {
 
   this._runtime_control.state = "end";
@@ -239,9 +269,9 @@ biglib.prototype._on_finish = function(err) {
     this._runtime_control.state = "error";
     this._runtime_control.error = err;
     this._runtime_control.message = err.message;
-    this._node.status({fill: "red", shape: "dot", text: err.message });
+    this._node.status({fill: "red", shape: this._status_type, text: err.message });
   } else {
-    this._node.status({fill: "green", shape: "dot", text: "done with " + this.progress() });
+    this._node.status({fill: "green", shape: this._status_type, text: "done with " + this.progress() });
   }
 
   this._node.send([ null, { control: this._runtime_control }]);
@@ -251,6 +281,9 @@ biglib.prototype._on_finish = function(err) {
   if (err) this._node.error(err);
 }
 
+//
+// Callback when the job stats
+//
 biglib.prototype._on_start = function(config, control) {
 
   this._runtime_control.records = this._runtime_control.size = 0;
@@ -267,6 +300,9 @@ biglib.prototype._on_start = function(config, control) {
   this._running = true; 
 }
 
+// 
+// Default ending stream. It sends data to the flow
+//
 biglib.prototype._out_stream = function(my_config) {
 
   var format = function(data) { return data }
@@ -278,7 +314,7 @@ biglib.prototype._out_stream = function(my_config) {
   var outstream = new stream.Transform( { objectMode: true });
   outstream._transform = (function(data, encoding, done) {
 
-    this._rated_status({fill: "blue", shape: "dot", text: "sending... " + this.progress() + " so far"});
+    this._rated_status({fill: "blue", shape: this._status_type, text: "sending... " + this.progress() + " so far"});
 
     // #1 big node principle: send blocks for big files management
     this._node.send([{ payload: format(data) }]);
@@ -289,7 +325,9 @@ biglib.prototype._out_stream = function(my_config) {
   return outstream;
 }
 
-// control is an incoming control message { control: {}, config: {} }
+//
+// Main stream pipes creator
+//
 biglib.prototype.create_stream = function(msg, in_streams, last) {
 
   var my_config = (msg || {}).config || this._def_config;
@@ -334,6 +372,9 @@ biglib.prototype.create_stream = function(msg, in_streams, last) {
   return { input: input, output: output };
 }
 
+//
+// Build a running control status with speed informations
+//
 biglib.prototype._speed_message = function() {
   var duration = moment.duration(moment().diff(this._runtime_control.start, 'seconds'));
 
@@ -344,6 +385,9 @@ biglib.prototype._speed_message = function() {
   }      
 }
 
+// 
+// Default stream for storing data size
+//
 biglib.prototype._size_stream = function(my_config) {
 
   var biglib = this;
@@ -364,6 +408,9 @@ biglib.prototype._size_stream = function(my_config) {
   return size_stream;
 }
 
+//
+// Default stream for storing records number
+//
 biglib.prototype._record_stream = function(my_config) {
 
   var biglib = this;
@@ -384,6 +431,10 @@ biglib.prototype._record_stream = function(my_config) {
   return record_stream;
 }
 
+// 
+// Wrapper for incoming messages in data generator mode
+// It avoids overlaps if, for example, a second filename is coming and the previous one is still in progress
+//
 biglib.prototype._enqueue = function(msg, input_stream) {
 
   console.log("Pushing...");
@@ -421,7 +472,11 @@ biglib.prototype.stream_file_blocks = function(msg) {
     // Documentation: https://nodejs.org/api/fs.html#fs_fs_createreadstream_path_options
     var config = this._extract_config(my_config, file_options);
 
-    return fs.createReadStream(my_config.filename, config);
+    try {
+      return fs.createReadStream(my_config.filename, config);
+    } catch (err) {
+      this._on_finish(err);
+    }
   }
 
   this._enqueue(msg, input_stream);
@@ -441,7 +496,11 @@ biglib.prototype.stream_data_lines = function(my_config) {
     // Documentation: https://nodejs.org/api/fs.html#fs_fs_createreadstream_path_options
     var config_file = this._extract_config(my_config, file_options);
 
-    return fs.createReadStream(my_config.filename, config_file.encoding);
+    try {    
+      return fs.createReadStream(my_config.filename, config_file.encoding);
+    } catch (err) {
+      this._on_finish(err);
+    }      
   }
 
   this._enqueue(msg, input_stream);
@@ -450,6 +509,7 @@ biglib.prototype.stream_data_lines = function(my_config) {
 //
 // input message: filename
 // output message: file content (1 message)
+//
 biglib.prototype.stream_full_file = function(msg) {
 
   var input_stream = function(my_config) {
@@ -461,16 +521,92 @@ biglib.prototype.stream_full_file = function(msg) {
 
     var config = this._extract_config(my_config, file_options);
 
-    fs.readFile(my_config.filename, config, (function(err, data) {
-      if (err) throw err;
-      this.push(data);
-      this.push(null);
-    }).bind(r));
+    try {
+      fs.readFile(my_config.filename, config, (function(err, data) {
+        if (err) throw err;
+        this.push(data);
+        this.push(null);
+      }).bind(r));
 
-    return r;
+      return r;
+
+    } catch (err) {
+      this._on_finish(err);
+    }
+
   }
 
   this._enqueue(msg, input_stream);
+};
+
+biglib.prototype.stream_remote_command = function(msg) {
+
+  var transform = stream.Transform;
+  var readable = stream.Readable;
+
+  var data = msg.payload;
+
+  var node = this;
+
+  var remote_stream_creator = function(my_config) {
+
+    var stderr = new readable();
+    // Avoid Error: not implemented error message
+    stderr._read = function() {}; 
+
+    var rc = new readable({ objectMode: true }); 
+    rc._read = function() {};
+
+    util.inherits(RemoteStream, transform);
+
+    function RemoteStream(config) {
+
+      if (!(this instanceof RemoteStream))
+        return new RemoteStream(options);
+
+      var conn = new Client();
+      node._working("Connecting to " + config.host + "...");
+
+      this.stderr = stderr;
+      this.rc = rc;
+
+      var me = this;
+
+      conn.on('ready', function() {
+        node._working("Executing ...");
+
+        conn.exec(config.commandLine, function(err, stream) {
+          if (err) throw err;
+
+          stream.on('close', function(code, signal) {
+            me.rc.push({ code: code, signal: signal });             
+            if (code >= config.minError) throw new Error("Return code " + code);
+          }).on('data', function(data) {
+            me.push(data);
+          }).stderr.on('data', function(data) {
+            me.stderr.push(data);
+          });
+
+          stream.write(data);
+          stream.end();
+
+        });      
+      }).connect(config);
+
+      transform.call(this, config);
+    }
+
+    RemoteStream.prototype._transform = function(data, encoding, done) {
+    }
+
+    var config = node._extract_config(my_config, ssh_options);
+
+    var stream = new RemoteStream(config);
+
+    return stream;
+  }
+
+  return this._enqueue(msg, remote_stream_creator);
 };
 
 //
@@ -483,15 +619,19 @@ biglib.prototype.stream_data_blocks = function(msg) {
 
   if (msg.control && (msg.control.state == "start" || msg.control.state == "standalone")) {
 
+    this._status_type = StatusTypeStream;
+
     this._input_stream = this._close_stream(this._input_stream);
 
     this._ready();
 
-    if (msg.config) this._input_stream = this.create_stream(msg, [ this._size_stream ]).input;
+    //if (msg.config) 
+    this._input_stream = this.create_stream(msg, [ this._size_stream ]).input;
   }
 
   if (msg.payload) {
-    if (! this._input_stream) this._input_stream = this.create_stream(msg, [ this._size_stream ]).input;
+    assert(this._input_stream, "strange state");
+    // if (! this._input_stream) this._input_stream = this.create_stream(msg, [ this._size_stream ]).input;
 
     this._input_stream.write(msg.payload);
   }
@@ -507,7 +647,7 @@ biglib.prototype.stream_data_blocks = function(msg) {
 
     this._runtime_control.control = msg.control;    // Parent control message
 
-    this._input_stream = this._close_stream(this._input_stream);   
+    this._input_stream = this._close_stream(this._input_stream);
   }
 
 }
@@ -516,22 +656,60 @@ biglib.prototype.config = function() {
 	return this._runtime_control.config;
 }
 
+biglib.prototype.set_generator_property = function(msg) {
+  if (msg[this._generator]) {
+    msg.config = msg.config || {};
+    msg.config[this._generator] = msg[this._generator];
+  }  
+  return msg;
+}
+
+//
+// Usually bound to incoming messages
+// Switch for data generator mode or data block mode
+//
 biglib.prototype.main = function(msg) {
 
-  switch (this.message_type(msg)) {
+  // control message = block mode
+  // already in block mode, go on
+  if (msg.control || this._input_stream) {
+    return this.stream_data_blocks(msg);
+  }
 
-    case 'block': 
-    case 'control':
-      this.stream_data_blocks(msg);     
-      break;
+  // more complicated now
+  // if node is configured to work as a data generator, payload is a trigger
+  // if the incoming message contains a value for the defined property "generator", will work as a data generator, configured on the fly
 
-    case 'filename': 
-      msg.config = this.new_config(msg.config);
+  // if node is not configured, acts as a classical filter (ie block mode with start + data + end in a whole message)
+  //   payload should not be considered as anything other than data
 
-      msg.config.filename = msg.config.filename || msg.filename || msg.payload;
-      this.stream_file_blocks(msg);
-      break;
-  }  
+  if (msg[this._generator] || this._def_config[this._generator]) {
+
+    this._status_type = StatusTypeGenerator;
+    this.set_generator_property(msg);
+
+    // Only data generators registered here are known for the moment
+    switch (this._generator) {
+
+      case 'filename':
+        this.stream_file_blocks(msg);
+        break;
+
+      case 'remote':
+        this.stream_remote_command(msg);
+        break;
+
+      default:
+        throw new Error("Can't act as a data generator as property \"generator\" is unknown");
+    }
+
+    return;
+
+  }
+
+  // Classical mode, acts as a filter
+  msg.control = { state: "standalone" }
+  this.stream_data_blocks(msg);
 }
 
 module.exports = biglib;
