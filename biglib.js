@@ -37,6 +37,7 @@ var filesize = require('filesize');
 var callerId = require('caller-id');
 var byline = require('byline');
 var Client = require('ssh2').Client;
+var duplex = require('./duplex');
 const util = require('util');
 const assert = require('assert');
 
@@ -93,6 +94,8 @@ function biglib(obj) {
   // this property tells the node can act as a data generator if defined in an incoming msg
   this._generator = obj.generator || "";
 
+  this._createCB = obj.createCB;
+
   // If the node is configured as a data generator, by default, its status will be of type generator (dot)
   this._default_status_type = this._status_type = (this._generator && this._def_config[this._generator]) ? StatusTypeGenerator : StatusTypeStream;
 
@@ -125,15 +128,23 @@ function biglib(obj) {
 //
 biglib.prototype._set_parser = function(parser, parser_config) {
   try {
-    if (parser == 'line') {
-      this.parser_stream = function (myconfig) { 
-        return new byline.LineStream(myconfig);
-      }
-      this.parser_config = line_options;
-    }
-    else {
-      this.parser_stream = parser;
-      this.parser_config = parser_config;
+    switch (parser) {
+      case 'line':
+        this.parser_stream = function (myconfig) { 
+          return new byline.LineStream(myconfig);
+        }
+        this.parser_config = line_options;
+        break;
+      case 'remote':
+        this.parser_stream = function (myconfig) { 
+          return this.remote_stream(myconfig);
+        }
+        this.parser_config = ssh_options;
+        break;
+      default:
+        this.parser_stream = parser;
+        this.parser_config = parser_config;
+        break;
     }
   } catch (err) {
     console.log(err.message);
@@ -213,6 +224,7 @@ biglib.prototype._extract_config = function(given_config, expected_keys) {
 // Require stream to close
 biglib.prototype._close_stream = function(input) {
   if (input) {
+    this.log("");
     input.end();
   } else {
     //this.log("damn, no input stream to close");
@@ -325,10 +337,38 @@ biglib.prototype._out_stream = function(my_config) {
   return outstream;
 }
 
+// 
+// Default ending stream. It sends data to the flow
+//
+biglib.prototype._out_stream_n = function(my_config, n) {
+
+  var format = function(data) { return data }
+  if (my_config.format) {
+    format = function(data) { return data.toString(my_config.format) }
+  }
+
+  // 0: std output, 1: control
+  if (n < 2) throw new Error("_out_stream only works with n > 1");
+  
+  // 2. Sender
+  var outstream = new stream.Transform({ objectMode: true });
+  outstream._transform = (function(data, encoding, done) {
+
+    // #1 big node principle: send blocks for big files management
+    var d = []; d[n] = { payload: format(data) };
+
+    this._node.send(d);
+
+    done();
+  }).bind(this);      
+
+  return outstream;
+}
+
 //
 // Main stream pipes creator
 //
-biglib.prototype.create_stream = function(msg, in_streams, last) {
+biglib.prototype.create_stream = function(msg, in_streams, other_outputs) {
 
   var my_config = (msg || {}).config || this._def_config;
 
@@ -346,22 +386,34 @@ biglib.prototype.create_stream = function(msg, in_streams, last) {
     .on('error', this._on_finish.bind(this))
 
     .run((function() {
-      output = input = in_streams.shift().call(this, my_config);
+      input = output = in_streams.shift().call(this, my_config);
 
       in_streams.forEach((function(s) {
         output = output.pipe(s.call(this, my_config));
       }).bind(this));
 
       if (this.parser_stream) {
-
         output = output
-          .pipe(this.parser_stream(this._extract_config(my_config, this.parser_config)))
+          .pipe((p = this.parser_stream(this._extract_config(my_config, this.parser_config))))
           .pipe(this._record_stream(my_config));
       }
 
       output = output.pipe(this._out_stream(my_config));
 
       output.on('finish', this._on_finish.bind(this));
+
+      if (p.stderr) {
+        other_outputs = 'stderr';
+      }
+
+      if (other_outputs) {
+        console.log("Has other outputs to bind");
+        var i = 2;
+        (Array.isArray(other_outputs) ? other_outputs : [ other_outputs ]).forEach(function(other_output) {
+          p[other_output].pipe(this._out_stream_n(my_config, i++));
+          console.log("Output #" + (i-1) + " bound");
+        }.bind(this));
+      }
 
     }).bind(this));
 
@@ -398,7 +450,8 @@ biglib.prototype._size_stream = function(my_config) {
   size_stream._transform = (function(data, encoding, done) {
     biglib._runtime_control.size += data.length;
 
-    this.push(data);
+    // TEMPORARY
+    this.push(data.toString());
 
     biglib._control_rated_send((biglib._speed_message).bind(biglib));
 
@@ -435,28 +488,27 @@ biglib.prototype._record_stream = function(my_config) {
 // Wrapper for incoming messages in data generator mode
 // It avoids overlaps if, for example, a second filename is coming and the previous one is still in progress
 //
-biglib.prototype._enqueue = function(msg, input_stream) {
-
-  console.log("Pushing...");
+biglib.prototype._enqueue = function(msg, input_stream, second_output) {
 
   var next = (function() {
     var elt = this._stack.pop();
     if (elt) {
       this.log("Running next in queue");
-      create(elt.msg, elt.input_stream);
+      create(elt.msg, elt.input_stream, elt.second_output);
     }
   }).bind(this);
 
-  var create = (function(msg, input_stream) {
+  var create = (function(msg, input_stream, second_output) {
     var s = []; if (input_stream) s.push(input_stream);
     s.push(this._size_stream);
-    this.create_stream(msg, s).output.on('finish', next);
+    (ret = this.create_stream(msg, s, second_output)).output.on('finish', next);
   }).bind(this);
 
   if (this._running) {
-    this._stack.push({ msg: msg, input_stream: input_stream });
+    this.log("Pushing...");
+    this._stack.push({ msg: msg, input_stream: input_stream, second_output: second_output });
   } else {
-    create(msg, input_stream);
+    create(msg, input_stream, second_output);
   }
 
 }
@@ -539,75 +591,70 @@ biglib.prototype.stream_full_file = function(msg) {
   this._enqueue(msg, input_stream);
 };
 
-biglib.prototype.stream_remote_command = function(msg) {
+biglib.prototype.remote_stream = function(my_config) {
 
   var transform = stream.Transform;
   var readable = stream.Readable;
-
-  var data = msg.payload;
-
   var node = this;
 
-  var remote_stream_creator = function(my_config) {
+  var rc = new readable({ objectMode: true }); 
+  rc._read = function() {};
 
-    var stderr = new readable();
-    // Avoid Error: not implemented error message
-    stderr._read = function() {}; 
+  // flow -> [ size_stream ] -> bufstream / -> / ssh.stdin
+  //                                             ssh.stdout / -> / [ outWStream, inRStream ] -> [ send_stream] -> flow
+  //                                             ssh.stderr / -> / stderr -> [ send_stream ] -> flow
 
-    var rc = new readable({ objectMode: true }); 
-    rc._read = function() {};
+  var bufstream = new stream.PassThrough({ objectMode: true });
+  var stderr = new stream.PassThrough({ objectMode: true });
 
-    util.inherits(RemoteStream, transform);
+  // duplex streams from http://codewinds.com/blog/2013-08-31-nodejs-duplex-streams.html
+  util.inherits(RemoteStream, duplex);
+  function RemoteStream(config) {
 
-    function RemoteStream(config) {
+    if (!(this instanceof RemoteStream))
+      return new RemoteStream(options);
 
-      if (!(this instanceof RemoteStream))
-        return new RemoteStream(options);
+    var conn = new Client();
+    node._working("Connecting to " + config.host + "...");
 
-      var conn = new Client();
-      node._working("Connecting to " + config.host + "...");
+    this.stderr = stderr;
+    this.rc = rc;
 
-      this.stderr = stderr;
-      this.rc = rc;
+    var me = this;
 
-      var me = this;
+    conn.on('ready', function() {
+      node._working("Executing ...");
 
-      conn.on('ready', function() {
-        node._working("Executing ...");
+      conn.exec(config.commandLine, function(err, stream) {
+        if (err) throw err;
 
-        conn.exec(config.commandLine, function(err, stream) {
-          if (err) throw err;
+        stream.on('close', function(code, signal) {
+          node._runtime_control.rc = code;
+          node._runtime_control.signal = signal;
+          console.log("Ending with rc " + code);
+          me.rc.push({ code: code, signal: signal });
+          me.end();
+          if (code >= config.minError) throw new Error("Return code " + code);
+        })
 
-          stream.on('close', function(code, signal) {
-            me.rc.push({ code: code, signal: signal });             
-            if (code >= config.minError) throw new Error("Return code " + code);
-          }).on('data', function(data) {
-            me.push(data);
-          }).stderr.on('data', function(data) {
-            me.stderr.push(data);
-          });
+        console.log("piping");
+        // SSH stream is available, connect the bufstream
+        bufstream.pipe(stream).pipe(me.outWStream);
 
-          stream.write(data);
-          stream.end();
+        // Also connect the ssh stderr stream to the pre allocated stderr 
+        stream.stderr.pipe(stderr);
+      });      
 
-        });      
-      }).connect(config);
+    }).connect(config);
 
-      transform.call(this, config);
-    }
+    duplex.call(this, config);
 
-    RemoteStream.prototype._transform = function(data, encoding, done) {
-    }
-
-    var config = node._extract_config(my_config, ssh_options);
-
-    var stream = new RemoteStream(config);
-
-    return stream;
+    // Incoming data from the flow is buffered into bufstream, waiting for the ssh stream to be available
+    this.inRStream.pipe(bufstream);
   }
 
-  return this._enqueue(msg, remote_stream_creator);
-};
+  return new RemoteStream(my_config);
+}
 
 //
 // input: data blocks
@@ -685,6 +732,8 @@ biglib.prototype.main = function(msg) {
 
   if (msg[this._generator] || this._def_config[this._generator]) {
 
+    console.log("Generator mode " + this._generator + " - " + this._def_config[this._generator] + ".");
+
     this._status_type = StatusTypeGenerator;
     this.set_generator_property(msg);
 
@@ -706,6 +755,8 @@ biglib.prototype.main = function(msg) {
     return;
 
   }
+
+  console.log("Standalone mode");
 
   // Classical mode, acts as a filter
   msg.control = { state: "standalone" }
