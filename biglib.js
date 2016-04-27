@@ -37,7 +37,6 @@ var filesize = require('filesize');
 var callerId = require('caller-id');
 var byline = require('byline');
 var Client = require('ssh2').Client;
-var duplex = require('./duplex');
 var es = require('event-stream');
 const util = require('util');
 const assert = require('assert');
@@ -52,12 +51,23 @@ const file_options = {
 }
 const ssh_options = {
   "host": "", "port": 22, 
-  "privateKey": { default: "", validation: function(v) { return require('fs').readFileSync(v) } },
+  "privateKey": { default: "", validation: function(v) {
+    try { 
+      return require('fs').readFileSync(v);
+    } catch(err) { 
+      throw new Error("privateKey validation error: " + err.messages) 
+    }
+  } },
   "username": "",
   "commandLine": "",
+  "commandArgs": [],
   "minError": 1
 }
-
+const spawn_options = {
+  "commandLine": "",
+  "commandArgs": [],
+  "minError": 1  
+}
 const data_generators = {
   "filename": {
 
@@ -76,6 +86,8 @@ function biglib(obj) {
 
   // This is a library that uses the node methods (status, error, send) so we need a reference to the node instance
 	this._node = obj.node;
+
+  this._credentials = obj.credentials;
 
   // This stack is used in case of multiple incoming "generator" messages. We don't want data from 2 files to be melt
   this._stack = [];
@@ -142,6 +154,12 @@ biglib.prototype._set_parser = function(parser, parser_config) {
         }
         this.parser_config = ssh_options;
         break;
+      case 'spawn':
+        this.parser_stream = function (myconfig) { 
+          return this.spawn_stream(myconfig);
+        }
+        this.parser_config = spawn_options;
+        break;        
       default:
         this.parser_stream = parser;
         this.parser_config = parser_config;
@@ -192,7 +210,15 @@ biglib.prototype._extract_config = function(given_config, expected_keys) {
       var validate = false;
 
       // If this expected configuration key is given, take it
-      if (given_config.hasOwnProperty(name)) {
+      if (this._credentials && this._credentials.hasOwnProperty(name)) {
+        out_config[name] = this._credentials[name];
+        validate = true;
+      }
+      else if (this._credentials && this._credentials.credentials && this._credentials.credentials.hasOwnProperty(name)) {
+        out_config[name] = this._credentials.credentials[name];
+        validate = true;
+      }
+      else if (given_config.hasOwnProperty(name)) {
         out_config[name] = given_config[name];
         validate = true;
       } else {
@@ -368,7 +394,7 @@ biglib.prototype._out_stream_n = function(my_config, n) {
 //
 // Main stream pipes creator
 //
-biglib.prototype.create_stream = function(msg, in_streams, other_outputs) {
+biglib.prototype.create_stream = function(msg, in_streams) {
 
   var my_config = (msg || {}).config || this._def_config;
 
@@ -402,15 +428,11 @@ biglib.prototype.create_stream = function(msg, in_streams, other_outputs) {
 
       output.on('finish', this._on_finish.bind(this));
 
-      if (p.stderr) {
-        other_outputs = 'stderr';
-      }
-
-      if (other_outputs) {
+      if (p.others) {
         //console.log("Has other outputs to bind");
         var i = 2;
-        (Array.isArray(other_outputs) ? other_outputs : [ other_outputs ]).forEach(function(other_output) {
-          p[other_output].pipe(this._out_stream_n(my_config, i++));
+        (Array.isArray(p.others) ? p.others : [ p.others ]).forEach(function(other_output) {
+          other_output.pipe(this._out_stream_n(my_config, i++));
           //console.log("Output #" + (i-1) + " bound");
         }.bind(this));
       }
@@ -517,6 +539,48 @@ biglib.prototype._enqueue = function(msg, input_stream, second_output) {
 // input message: filename
 // output messages: data blocks (n blocks)
 //
+biglib.prototype.stream_spawn_command = function(msg) {
+
+  var input_stream = function(my_config) {
+
+    // Documentation: https://nodejs.org/api/fs.html#fs_fs_createreadstream_path_options
+    var config = this._extract_config(my_config, spawn_options);
+
+    try {
+      return this.spawn_stream(config);
+    } catch (err) {
+      this._on_finish(err);
+    }
+  }
+
+  this._enqueue(msg, input_stream);
+};
+
+//
+// input message: filename
+// output messages: data blocks (n blocks)
+//
+biglib.prototype.stream_remote_command = function(msg) {
+
+  var input_stream = function(my_config) {
+
+    // Documentation: https://nodejs.org/api/fs.html#fs_fs_createreadstream_path_options
+    var config = this._extract_config(my_config, ssh_options);
+
+    try {
+      return this.remote_stream(config);
+    } catch (err) {
+      this._on_finish(err);
+    }
+  }
+
+  this._enqueue(msg, input_stream);
+};
+
+//
+// input message: filename
+// output messages: data blocks (n blocks)
+//
 biglib.prototype.stream_file_blocks = function(msg) {
 
   var input_stream = function(my_config) {
@@ -591,42 +655,58 @@ biglib.prototype.stream_full_file = function(msg) {
   this._enqueue(msg, input_stream);
 };
 
+biglib.prototype.spawn_stream = function(my_config) {
+
+  var stream = spawn(my_config.commandLine, my_config.commandArgs);
+  stream.on('exit', function(code, signal) {
+    this._runtime_control.rc = code;
+    this._runtime_control.signal = signal;
+    if (code >= my_config.minError) this._err = new Error("Return code " + code);    
+  }.bind(this));
+
+  var ret = es.duplex(stream.stdin, stream.stdout);
+  ret.others = [ stream.stderr ];
+
+  return ret;
+}
+
 biglib.prototype.remote_stream = function(my_config) {
+
+  console.log(my_config);
 
   var stdin  = new stream.PassThrough({ objectMode: true }); // acts as a buffer while ssh is connecting
   var stdout = new stream.PassThrough({ objectMode: true });
   var stderr = new stream.PassThrough({ objectMode: true });
-  var node = this;
 
   var conn = new Client();
-  node._working("Connecting to " + my_config.host + "...");
-
-  var me = this;
+  this._working("Connecting to " + my_config.host + "...");
 
   conn.on('ready', function() {
-    node._working("Executing ...");
+    this._working("Executing ...");
 
-    conn.exec(my_config.commandLine, function(err, stream) {
+    var commandLine = my_config.commandLine + ' ' + ((my_config.commandArgs || []).map(function(x) { return x.replace(' ', '\\ ') })).join(' ');
+
+    conn.exec(commandLine, function(err, stream) {
       if (err) throw err;
 
       stream.on('close', function(code, signal) {
-        console.log("Return code = " + code);
-        node._runtime_control.rc = code;
-        node._runtime_control.signal = signal;
-        if (code >= my_config.minError) me._err = new Error("Return code " + code);
-      })
+        this._runtime_control.rc = code;
+        this._runtime_control.signal = signal;
+        if (code >= my_config.minError) this._err = new Error("Return code " + code);
+      }.bind(this))
 
       // SSH stream is available, connect the bufstream
       stdin.pipe(stream).pipe(stdout);
 
       // Also connect the ssh stderr stream to the pre allocated stderr 
       stream.stderr.pipe(stderr);
-    });      
 
-  }).connect(my_config);
+    }.bind(this));      
+
+  }.bind(this)).connect(my_config);
 
   var ret = es.duplex(stdin, stdout);
-  ret.stderr = stderr;
+  ret.others = [ stderr ];
 
   return ret;
 }
@@ -723,6 +803,10 @@ biglib.prototype.main = function(msg) {
       case 'remote':
         this.stream_remote_command(msg);
         break;
+
+      case 'spawn':
+        this.stream_spawn_command(msg);
+        break;        
 
       default:
         throw new Error("Can't act as a data generator as property \"generator\" is unknown");
