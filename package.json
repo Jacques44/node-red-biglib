@@ -25,6 +25,7 @@
     "byline": "^4.2.1",
     "caller-id": "^0.1.0",
     "domain": "0.0.1",
+    "event-stream": "^3.3.2",
     "filesize": "^3.2.1",
     "fs": "0.0.2",
     "moment": "^2.12.0",

@@ -38,6 +38,7 @@ var callerId = require('caller-id');
 var byline = require('byline');
 var Client = require('ssh2').Client;
 var duplex = require('./duplex');
+var es = require('event-stream');
 const util = require('util');
 const assert = require('assert');
 
@@ -224,7 +225,6 @@ biglib.prototype._extract_config = function(given_config, expected_keys) {
 // Require stream to close
 biglib.prototype._close_stream = function(input) {
   if (input) {
-    this.log("");
     input.end();
   } else {
     //this.log("damn, no input stream to close");
@@ -386,7 +386,7 @@ biglib.prototype.create_stream = function(msg, in_streams, other_outputs) {
     .on('error', this._on_finish.bind(this))
 
     .run((function() {
-      input = output = in_streams.shift().call(this, my_config);
+      output = input = in_streams.shift().call(this, my_config);
 
       in_streams.forEach((function(s) {
         output = output.pipe(s.call(this, my_config));
@@ -407,11 +407,11 @@ biglib.prototype.create_stream = function(msg, in_streams, other_outputs) {
       }
 
       if (other_outputs) {
-        console.log("Has other outputs to bind");
+        //console.log("Has other outputs to bind");
         var i = 2;
         (Array.isArray(other_outputs) ? other_outputs : [ other_outputs ]).forEach(function(other_output) {
           p[other_output].pipe(this._out_stream_n(my_config, i++));
-          console.log("Output #" + (i-1) + " bound");
+          //console.log("Output #" + (i-1) + " bound");
         }.bind(this));
       }
 
@@ -593,67 +593,42 @@ biglib.prototype.stream_full_file = function(msg) {
 
 biglib.prototype.remote_stream = function(my_config) {
 
-  var transform = stream.Transform;
-  var readable = stream.Readable;
+  var stdin  = new stream.PassThrough({ objectMode: true }); // acts as a buffer while ssh is connecting
+  var stdout = new stream.PassThrough({ objectMode: true });
+  var stderr = new stream.PassThrough({ objectMode: true });
   var node = this;
 
-  var rc = new readable({ objectMode: true }); 
-  rc._read = function() {};
+  var conn = new Client();
+  node._working("Connecting to " + my_config.host + "...");
 
-  // flow -> [ size_stream ] -> bufstream / -> / ssh.stdin
-  //                                             ssh.stdout / -> / [ outWStream, inRStream ] -> [ send_stream] -> flow
-  //                                             ssh.stderr / -> / stderr -> [ send_stream ] -> flow
+  var me = this;
 
-  var bufstream = new stream.PassThrough({ objectMode: true });
-  var stderr = new stream.PassThrough({ objectMode: true });
+  conn.on('ready', function() {
+    node._working("Executing ...");
 
-  // duplex streams from http://codewinds.com/blog/2013-08-31-nodejs-duplex-streams.html
-  util.inherits(RemoteStream, duplex);
-  function RemoteStream(config) {
+    conn.exec(my_config.commandLine, function(err, stream) {
+      if (err) throw err;
 
-    if (!(this instanceof RemoteStream))
-      return new RemoteStream(options);
+      stream.on('close', function(code, signal) {
+        console.log("Return code = " + code);
+        node._runtime_control.rc = code;
+        node._runtime_control.signal = signal;
+        if (code >= my_config.minError) me._err = new Error("Return code " + code);
+      })
 
-    var conn = new Client();
-    node._working("Connecting to " + config.host + "...");
+      // SSH stream is available, connect the bufstream
+      stdin.pipe(stream).pipe(stdout);
 
-    this.stderr = stderr;
-    this.rc = rc;
+      // Also connect the ssh stderr stream to the pre allocated stderr 
+      stream.stderr.pipe(stderr);
+    });      
 
-    var me = this;
+  }).connect(my_config);
 
-    conn.on('ready', function() {
-      node._working("Executing ...");
+  var ret = es.duplex(stdin, stdout);
+  ret.stderr = stderr;
 
-      conn.exec(config.commandLine, function(err, stream) {
-        if (err) throw err;
-
-        stream.on('close', function(code, signal) {
-          node._runtime_control.rc = code;
-          node._runtime_control.signal = signal;
-          console.log("Ending with rc " + code);
-          me.rc.push({ code: code, signal: signal });
-          me.end();
-          if (code >= config.minError) throw new Error("Return code " + code);
-        })
-
-        console.log("piping");
-        // SSH stream is available, connect the bufstream
-        bufstream.pipe(stream).pipe(me.outWStream);
-
-        // Also connect the ssh stderr stream to the pre allocated stderr 
-        stream.stderr.pipe(stderr);
-      });      
-
-    }).connect(config);
-
-    duplex.call(this, config);
-
-    // Incoming data from the flow is buffered into bufstream, waiting for the ssh stream to be available
-    this.inRStream.pipe(bufstream);
-  }
-
-  return new RemoteStream(my_config);
+  return ret;
 }
 
 //
@@ -720,6 +695,7 @@ biglib.prototype.main = function(msg) {
   // control message = block mode
   // already in block mode, go on
   if (msg.control || this._input_stream) {
+    //this.log("Block mode");
     return this.stream_data_blocks(msg);
   }
 
@@ -732,7 +708,7 @@ biglib.prototype.main = function(msg) {
 
   if (msg[this._generator] || this._def_config[this._generator]) {
 
-    console.log("Generator mode " + this._generator + " - " + this._def_config[this._generator] + ".");
+    this.log("Generator mode " + this._generator + " - " + this._def_config[this._generator] + ".");
 
     this._status_type = StatusTypeGenerator;
     this.set_generator_property(msg);
@@ -756,7 +732,7 @@ biglib.prototype.main = function(msg) {
 
   }
 
-  console.log("Standalone mode");
+  //this.log("Standalone mode");
 
   // Classical mode, acts as a filter
   msg.control = { state: "standalone" }
