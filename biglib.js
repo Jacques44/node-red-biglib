@@ -95,6 +95,8 @@ function biglib(obj) {
   this._last_rated_status = new Date();
   this._last_control_rated_send = new Date();
 
+  this._before_finish = obj.on_finish;
+
   // We don't care about internal node-red property for the nodes. I delete this because I have previously cloned the config
   delete this._def_config.wires;
   delete this._def_config.x;
@@ -262,17 +264,13 @@ biglib.prototype._ready = function() {
 }
 
 biglib.prototype.working = function(text) {
+  console.log("[Working]... " + text);
   this._node.status({fill: "blue", shape: this._status_type, text: text});
 }
 
-biglib.prototype.stats = function(stats) {
-  console.log(stats);
+biglib.prototype.stats = function(stats) {  
   for (k in stats) {
-    if (k == '_err') {
-      this[k] = stats[k];
-    } else {
-      this._runtime_control[k] = stats[k];    
-    }
+    this._runtime_control[k] = stats[k];    
   }
 }
 
@@ -300,10 +298,16 @@ biglib.prototype.log = function(msg) {
   console.log("[" + this._node.constructor.name + "@" + caller.functionName + "] " + JSON.stringify(msg, null, 2));
 }
 
+biglib.prototype.set_error = function(err) {
+  this._err = err;
+}
+
 //
 // Callback when the job is done
 //
 biglib.prototype._on_finish = function(err) {
+
+  if (this._before_finish) this._before_finish(this._runtime_control); 
 
   console.log("on finish");
   this._runtime_control.state = "end";
@@ -424,7 +428,7 @@ biglib.prototype.create_stream = function(msg, in_streams) {
 
     var d = require('domain').create();
 
-    d.on('error', this._on_finish.bind(this));
+    d.on('errorX', this._on_finish.bind(this));
 
     d.run(function() {
       output = input = in_streams.shift().call(this, my_config);
@@ -433,14 +437,21 @@ biglib.prototype.create_stream = function(msg, in_streams) {
         output = output.pipe(s.call(this, my_config));
       }).bind(this));
 
+      var p;
       if (this.parser_stream) {
         output = output
           .pipe((p = this.parser_stream(this._extract_config(my_config, this.parser_config))))
           .pipe(this._record_stream(my_config));
       }
-      p.on('error', function(err) {
-        console.log("Got a p error");
-      })
+      if (p) {
+        p
+        .on('error', function(err) {
+          console.log("Got a p error");
+          this._on_finish(err);
+        }.bind(this))
+        .on('working', this.working.bind(this))
+        console.log("Mise en place du handler working");
+      }
 
       output = output.pipe(this._out_stream(my_config));
 
@@ -454,6 +465,7 @@ biglib.prototype.create_stream = function(msg, in_streams) {
           //console.log("Output #" + (i-1) + " bound");
         }.bind(this));
       }
+
     }.bind(this));
 
   } catch (err) {
