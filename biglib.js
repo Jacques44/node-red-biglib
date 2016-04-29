@@ -30,7 +30,6 @@
 */
 
 var fs = require('fs');
-var domain = require('domain');
 var stream = require('stream');
 var moment = require('moment');
 var filesize = require('filesize');
@@ -82,7 +81,7 @@ function biglib(obj) {
 	this._def_config = Object.assign({}, this._validate_config(obj.config));
 
   // If node is configured as a parser, store the information
-  this._set_parser(obj.parser, obj.parser_config);
+  this._set_parser(obj.parser, obj.parser_config || {});
 
   // This is a library that uses the node methods (status, error, send) so we need a reference to the node instance
 	this._node = obj.node;
@@ -262,8 +261,19 @@ biglib.prototype._ready = function() {
   this._node.status({fill: "blue", shape: this._status_type, text: "ready !"});
 }
 
-biglib.prototype._working = function(text) {
+biglib.prototype.working = function(text) {
   this._node.status({fill: "blue", shape: this._status_type, text: text});
+}
+
+biglib.prototype.stats = function(stats) {
+  console.log(stats);
+  for (k in stats) {
+    if (k == '_err') {
+      this[k] = stats[k];
+    } else {
+      this._runtime_control[k] = stats[k];    
+    }
+  }
 }
 
 biglib.prototype._rated_status = function(msg) {
@@ -295,15 +305,16 @@ biglib.prototype.log = function(msg) {
 //
 biglib.prototype._on_finish = function(err) {
 
+  console.log("on finish");
   this._runtime_control.state = "end";
   this._runtime_control.message = "success";
   this._runtime_control.end = new Date();
   this._runtime_control.speed = 0;
 
   err = err || this._err;
-  delete this._err;
+  this._err = err;
 
-  if (err) {
+  if (err) {    
     this._runtime_control.state = "error";
     this._runtime_control.error = err;
     this._runtime_control.message = err.message;
@@ -316,7 +327,10 @@ biglib.prototype._on_finish = function(err) {
 
   this._running = false;
 
-  if (err) this._node.error(err);
+  if (err) {
+    console.log(err, err.stack.split("\n"))
+    this._node.error(err);
+  }
 }
 
 //
@@ -398,20 +412,21 @@ biglib.prototype.create_stream = function(msg, in_streams) {
 
   var my_config = (msg || {}).config || this._def_config;
 
+  // Big node status and statistics
+  this._on_start(my_config, msg.control);
+
   var input;
   var output;
 
   assert(this._runtime_control, "create_stream, no runtime_control");
 
-  // Error management using domain
-  // Everything linked together with error management
-  // Cf documentation
-  // Run the supplied function in the context of the domain, implicitly binding all event emitters, timers, and lowlevel requests that are created in that context
-  domain.create()
+  try {
 
-    .on('error', this._on_finish.bind(this))
+    var d = require('domain').create();
 
-    .run((function() {
+    d.on('error', this._on_finish.bind(this));
+
+    d.run(function() {
       output = input = in_streams.shift().call(this, my_config);
 
       in_streams.forEach((function(s) {
@@ -423,12 +438,15 @@ biglib.prototype.create_stream = function(msg, in_streams) {
           .pipe((p = this.parser_stream(this._extract_config(my_config, this.parser_config))))
           .pipe(this._record_stream(my_config));
       }
+      p.on('error', function(err) {
+        console.log("Got a p error");
+      })
 
       output = output.pipe(this._out_stream(my_config));
 
       output.on('finish', this._on_finish.bind(this));
 
-      if (p.others) {
+      if (p && p.others) {
         //console.log("Has other outputs to bind");
         var i = 2;
         (Array.isArray(p.others) ? p.others : [ p.others ]).forEach(function(other_output) {
@@ -436,11 +454,11 @@ biglib.prototype.create_stream = function(msg, in_streams) {
           //console.log("Output #" + (i-1) + " bound");
         }.bind(this));
       }
+    }.bind(this));
 
-    }).bind(this));
-
-  // Big node status and statistics
-  this._on_start(my_config, msg.control);
+  } catch (err) {
+    this._on_finish(err);
+  }
 
   // Return is the entry point for incoming data
   return { input: input, output: output };
@@ -467,10 +485,9 @@ biglib.prototype._size_stream = function(my_config) {
   var biglib = this;
   assert(biglib._runtime_control, "size_stream, pas de runtime_control");
 
-  // Streams are created in the scope of domain (very very important)
   var size_stream = new stream.Transform({ objectMode: true });
   size_stream._transform = (function(data, encoding, done) {
-    biglib._runtime_control.size += data.length;
+    biglib._runtime_control.size += data.length || 0;
 
     // TEMPORARY
     this.push(data.toString());
@@ -490,8 +507,7 @@ biglib.prototype._record_stream = function(my_config) {
 
   var biglib = this;
   assert(biglib._runtime_control, "record_stream, pas de runtime_control");
-
-  // Streams are created in the scope of domain (very very important)
+  
   var record_stream = new stream.Transform({ objectMode: true });
   record_stream._transform = (function(data, encoding, done) {
     biglib._runtime_control.records++;
@@ -672,17 +688,15 @@ biglib.prototype.spawn_stream = function(my_config) {
 
 biglib.prototype.remote_stream = function(my_config) {
 
-  console.log(my_config);
-
   var stdin  = new stream.PassThrough({ objectMode: true }); // acts as a buffer while ssh is connecting
   var stdout = new stream.PassThrough({ objectMode: true });
   var stderr = new stream.PassThrough({ objectMode: true });
 
   var conn = new Client();
-  this._working("Connecting to " + my_config.host + "...");
+  this.working("Connecting to " + my_config.host + "...");
 
   conn.on('ready', function() {
-    this._working("Executing ...");
+    this.working("Executing ...");
 
     var commandLine = my_config.commandLine + ' ' + ((my_config.commandArgs || []).map(function(x) { return x.replace(' ', '\\ ') })).join(' ');
 
@@ -821,6 +835,7 @@ biglib.prototype.main = function(msg) {
   // Classical mode, acts as a filter
   msg.control = { state: "standalone" }
   this.stream_data_blocks(msg);
+
 }
 
 module.exports = biglib;
