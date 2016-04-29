@@ -290,7 +290,7 @@ biglib.prototype._on_finish = function(err) {
   this._running = false;
 
   if (err) {
-    console.log(err, err.stack.split("\n"))
+    //console.log(err, err.stack.split("\n"))
     this._node.error(err);
   }
 }
@@ -308,6 +308,7 @@ biglib.prototype._on_start = function(config, control) {
   delete this._runtime_control.end;
   this._runtime_control.state = "start";  
   this._runtime_control.message = "running...";
+  delete this._err;
 
   this._node.send([ null, { control: this._runtime_control }]);   
 
@@ -367,12 +368,20 @@ biglib.prototype._out_stream_n = function(my_config, n) {
   return outstream;
 }
 
+biglib.prototype.merge_config = function(msg) {
+  msg.config = msg.config || {};
+  for (var k in this._def_config) {
+    if (!msg.config.hasOwnProperty(k)) msg.config[k] = this._def_config[k];
+  }
+  return msg;
+}
+
 //
 // Main stream pipes creator
 //
 biglib.prototype.create_stream = function(msg, in_streams) {
 
-  var my_config = (msg || {}).config || this._def_config;
+  var my_config = this.merge_config(msg).config;
 
   // Big node status and statistics
   this._on_start(my_config, msg.control);
