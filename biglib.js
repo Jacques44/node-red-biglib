@@ -65,10 +65,13 @@ function biglib(obj) {
   // This stack is used in case of multiple incoming "generator" messages. We don't want data from 2 files to be melt
   this._stack = [];
 
+  this._finish_event = obj.finish_event || 'finish';
+
   // These control the refresh rates for visual statuses and running control messages
   this._last_rated_status = new Date();
   this._last_control_rated_send = new Date();
 
+  // Custom finish event to listen to
   this._before_finish = obj.on_finish;
 
   // We don't care about internal node-red property for the nodes. I delete this because I have previously cloned the config
@@ -261,6 +264,10 @@ biglib.prototype.set_error = function(err) {
   this._err = err;
 }
 
+biglib.prototype.set_warning = function() {
+  this._warn = true;
+}
+
 //
 // Callback when the job is done
 //
@@ -282,7 +289,7 @@ biglib.prototype._on_finish = function(err) {
     this._runtime_control.message = err.message;
     this._node.status({fill: "red", shape: this._status_type, text: err.message });
   } else {
-    this._node.status({fill: "green", shape: this._status_type, text: "done with " + this.progress() });
+    this._node.status({fill: this._warn ? "yellow": "green", shape: this._status_type, text: "done with " + this.progress() });
   }
 
   this._node.send([ null, { control: this._runtime_control }]);
@@ -309,6 +316,7 @@ biglib.prototype._on_start = function(config, control) {
   this._runtime_control.state = "start";  
   this._runtime_control.message = "running...";
   delete this._err;
+  delete this._warn;
 
   this._node.send([ null, { control: this._runtime_control }]);   
 
@@ -369,6 +377,7 @@ biglib.prototype._out_stream_n = function(my_config, n) {
 }
 
 biglib.prototype.merge_config = function(msg) {
+
   msg.config = msg.config || {};
   for (var k in this._def_config) {
     if (!msg.config.hasOwnProperty(k)) msg.config[k] = this._def_config[k];
@@ -393,6 +402,7 @@ biglib.prototype.create_stream = function(msg, in_streams) {
 
   try {
 
+    // Still using domain (I know they are deprecated) but there is no other way to catch async event by now
     var d = require('domain').create();
 
     d.on('error', this._on_finish.bind(this));
@@ -416,12 +426,16 @@ biglib.prototype.create_stream = function(msg, in_streams) {
           this._on_finish(err);
         }.bind(this))
         .on('working', this.working.bind(this))
+        .on(this._finish_event, this._on_finish.bind(this));
       }
 
+      // finale pipe to the tranform stream binding the data to the node output (using node.send)
       output = output.pipe(this._out_stream(my_config));
 
-      output.on('finish', this._on_finish.bind(this));
+      // If no parser_stream then no custom finish event (_finish_event) so wait for std finish event
+      if (!p) output.on('finish', this._on_finish.bind(this));
 
+      // If parser_stream as an array of others output streams, bind them to the node outputs starting by 2
       if (p && p.others) {
         //console.log("Has other outputs to bind");
         var i = 2;
@@ -460,7 +474,7 @@ biglib.prototype._speed_message = function() {
 biglib.prototype._size_stream = function(my_config) {
 
   var biglib = this;
-  assert(biglib._runtime_control, "size_stream, pas de runtime_control");
+  assert(biglib._runtime_control, "size_stream, no runtime_control");
 
   var size_stream = new stream.Transform({ objectMode: true });
   size_stream._transform = (function(data, encoding, done) {
@@ -483,7 +497,7 @@ biglib.prototype._size_stream = function(my_config) {
 biglib.prototype._record_stream = function(my_config) {
 
   var biglib = this;
-  assert(biglib._runtime_control, "record_stream, pas de runtime_control");
+  assert(biglib._runtime_control, "record_stream, no runtime_control");
   
   var record_stream = new stream.Transform({ objectMode: true });
   record_stream._transform = (function(data, encoding, done) {
@@ -554,7 +568,7 @@ biglib.prototype.stream_file_blocks = function(msg) {
 // output messages: data blocks (n blocks)
 // Documentation: https://www.npmjs.com/package/line-by-line
 //
-biglib.prototype.stream_data_lines = function(my_config) {
+biglib.prototype.stream_data_lines = function(msg) {
 
   var input_stream = function(my_config) {
 
@@ -627,7 +641,7 @@ biglib.prototype.stream_data_blocks = function(msg) {
   }
 
   if (msg.payload) {
-    assert(this._input_stream, "strange state");
+    assert(this._input_stream, "unexpected state");
     // if (! this._input_stream) this._input_stream = this.create_stream(msg, [ this._size_stream ]).input;
 
     this._input_stream.write(msg.payload);
@@ -637,7 +651,7 @@ biglib.prototype.stream_data_blocks = function(msg) {
 
     if (msg.control.state == "error") {
       // Resend error message
-      this._node.send([ null, msg ]);
+      //this._node.send([ null, msg ]);
       this._err = new Error(msg.control.error + " from upstream");
     }    
 
