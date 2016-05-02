@@ -37,6 +37,7 @@ var callerId = require('caller-id');
 var byline = require('byline');
 var util = require('util');
 var assert = require('assert');
+var sq = require('shell-quote');
 
 var StatusTypeStream = "ring";
 var StatusTypeGenerator = "dot";
@@ -722,6 +723,38 @@ biglib.prototype.main = function(msg) {
   msg.control = { state: "standalone" }
   this.stream_data_blocks(msg);
 
+}
+
+biglib.argument_to_array = function(arg) {
+
+  if (Array.isArray(arg)) return arg;
+  if (typeof arg == 'object') {
+    var ret = [];
+    Object.keys(arg).forEach(function(k) {
+      ret.push(k);
+      ret.push(typeof arg[k] == 'object' ? JSON.stringify(arg[k]) : arg[k].toString());
+    })
+    return ret;
+  }
+  return sq.parse((arg||"").toString());
+}    
+
+biglib.argument_to_string = function(arg) {
+  return sq.quote(biglib.argument_to_array(arg));
+}
+
+biglib.min_finish = function(stats) {  
+  var config = this._runtime_control.config;
+  if (config.minError && stats.rc >= config.minError) this.set_error(new Error("Return code " + stats.rc)); 
+  else if (config.minWarning && stats.rc >= config.minWarning) this.set_warning();                
+};
+
+biglib.dummy_writable = function(needed) {
+  if (!needed) return;
+  // Build a dummy stream that discards input message
+  dummy = new require('stream').Writable();
+  dummy._write = function(data, encoding, done) { done() }  
+  return dummy;
 }
 
 module.exports = biglib;
