@@ -75,6 +75,8 @@ function biglib(obj) {
   // Custom finish event to listen to
   this._before_finish = obj.on_finish;
 
+  this._sending_msg = obj.sending_msg || "sending";
+
   // We don't care about internal node-red property for the nodes. I delete this because I have previously cloned the config
   delete this._def_config.wires;
   delete this._def_config.x;
@@ -95,14 +97,14 @@ function biglib(obj) {
   this.progress = function () { 
     switch (obj.status || 'filesize') {
       case 'filesize':
-        return function() { return filesize(this._runtime_control.size) }
+        return function(running) { return (running ? "sending " : "done with ") + filesize(this._runtime_control.size) + " so far" }
         break;
       case 'records': 
-        return function() { return this._runtime_control.records + " records" }
+        return function(running) { return (running ? "sending " : "done with ") + this._runtime_control.records + " records" + " so far" }
         break;
       default:
         if (typeof obj.status == "function") return obj.status;
-        return function() { return "..." }
+        return function(running) { return (running ? "running" : "done") }
     }
   }();
 
@@ -238,6 +240,7 @@ biglib.prototype.stats = function(stats) {
 }
 
 biglib.prototype._rated_status = function(msg) {
+  if (!this._running) return;
   var now = Date.now();
   if (now - this._last_rated_status > this._runtime_control.config.status_rate || 0) {
     this._node.status(msg);
@@ -274,6 +277,8 @@ biglib.prototype.set_warning = function() {
 //
 biglib.prototype._on_finish = function(err) {
 
+  this._running = false;
+
   if (this._before_finish) this._before_finish(this._runtime_control); 
 
   this._runtime_control.state = "end";
@@ -290,12 +295,10 @@ biglib.prototype._on_finish = function(err) {
     this._runtime_control.message = err.message;
     this._node.status({fill: "red", shape: this._status_type, text: err.message });
   } else {
-    this._node.status({fill: this._warn ? "yellow": "green", shape: this._status_type, text: "done with " + this.progress() });
+    this._node.status({fill: this._warn ? "yellow": "green", shape: this._status_type, text: this.progress(false) });
   }
 
   this._node.send([ null, { control: this._runtime_control }]);
-
-  this._running = false;
 
   if (err) {
     //console.log(err, err.stack.split("\n"))
@@ -318,6 +321,7 @@ biglib.prototype._on_start = function(config, control) {
   this._runtime_control.message = "running...";
   delete this._err;
   delete this._warn;
+  this._runtime_control.rc = "running";
 
   this._node.send([ null, { control: this._runtime_control }]);   
 
@@ -338,7 +342,7 @@ biglib.prototype._out_stream = function(my_config) {
   var outstream = new stream.Transform( { objectMode: true });
   outstream._transform = (function(data, encoding, done) {
 
-    this._rated_status({fill: "blue", shape: this._status_type, text: "sending... " + this.progress() + " so far"});
+    this._rated_status({fill: "blue", shape: this._status_type, text: this.progress(true) });
 
     // #1 big node principle: send blocks for big files management
     this._node.send([{ payload: format(data) }]);
@@ -481,8 +485,7 @@ biglib.prototype._size_stream = function(my_config) {
   size_stream._transform = (function(data, encoding, done) {
     biglib._runtime_control.size += data.length || 0;
 
-    // TEMPORARY
-    this.push(data.toString());
+    this.push(data);
 
     biglib._control_rated_send((biglib._speed_message).bind(biglib));
 
@@ -746,15 +749,42 @@ biglib.argument_to_string = function(arg) {
 biglib.min_finish = function(stats) {  
   var config = this._runtime_control.config;
   if (config.minError && stats.rc >= config.minError) this.set_error(new Error("Return code " + stats.rc)); 
-  else if (config.minWarning && stats.rc >= config.minWarning) this.set_warning();                
+  else if (config.minWarning && stats.rc >= config.minWarning) this.set_warning();
 };
 
 biglib.dummy_writable = function(needed) {
   if (!needed) return;
-  // Build a dummy stream that discards input message
-  dummy = new require('stream').Writable();
+  // Build a dummy stream that discards input message. If not in objectMode, throws typeError: Invalid non-string/buffer chunk if 
+  // receiving a timestamp
+  dummy = new require('stream').Writable({ objectMode: true });
   dummy._write = function(data, encoding, done) { done() }  
   return dummy;
+}
+
+biglib.prototype.duration = function(locale) { 
+  var old_loc = moment.locale();
+  if (locale) moment.locale(locale);
+  var duration = moment.duration(moment().diff(this._runtime_control.start, 'seconds')).humanize();
+  moment.locale(old_loc);
+  return duration;
+}
+
+biglib.prototype.filesize = function() {
+  return filesize(this._runtime_control.size);
+}
+
+biglib.stringify_stream = function() {
+  var ret = new stream.Transform({ objectMode: true });
+  ret._transform = function(data, encoding, done) {
+    // Stringify
+    if (typeof data == 'object') {
+      this.push(JSON.stringify(data));
+    } else {
+      this.push(data.toString());
+    }
+    done();
+  }
+  return ret;
 }
 
 module.exports = biglib;
