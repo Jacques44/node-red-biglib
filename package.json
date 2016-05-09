@@ -1,6 +1,6 @@
 {
   "name": "node-red-biglib",
-  "version": "1.1.0",
+  "version": "1.1.1",
   "description": "library for building node-red flows that supports blocks, high volume",
   "main": "biglib.js",
   "scripts": {
@@ -20,7 +20,7 @@
     "url": "https://github.com/Jacques44/node-red-biglib/issues"
   },
   "homepage": "https://github.com/Jacques44/node-red-biglib",
-  "_id": "node-red-biglib@1.1.0",
+  "_id": "node-red-biglib@1.1.1",
   "dependencies": {
     "byline": "^4.2.1",
     "caller-id": "^0.1.0",
