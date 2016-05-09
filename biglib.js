@@ -97,10 +97,10 @@ function biglib(obj) {
   this.progress = function () { 
     switch (obj.status || 'filesize') {
       case 'filesize':
-        return function(running) { return (running ? "sending " : "done with ") + filesize(this._runtime_control.size) + " so far" }
+        return function(running) { return (running ? "sending " : "done with ") + filesize(this._runtime_control.size) + (running ? " so far" : "") }
         break;
       case 'records': 
-        return function(running) { return (running ? "sending " : "done with ") + this._runtime_control.records + " records" + " so far" }
+        return function(running) { return (running ? "sending " : "done with ") + this._runtime_control.records + " record" + (this._runtime_control.records > 1 ? "s" : "") + (running ? " so far" : "") }
         break;
       default:
         if (typeof obj.status == "function") return obj.status;
