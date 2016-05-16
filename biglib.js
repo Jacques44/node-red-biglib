@@ -538,7 +538,12 @@ biglib.prototype._enqueue = function(msg, input_stream, second_output) {
   var create = (function(msg, input_stream, second_output) {
     var s = []; if (input_stream) s.push(input_stream);
     s.push(this._size_stream);
-    (ret = this.create_stream(msg, s, second_output)).parser.on(this._finish_event, next);
+    ret = this.create_stream(msg, s, second_output);
+    if (ret.parser) {
+      ret.parser.on(this._finish_event, next);
+    } else {
+      ret.output.on(this._finish_event, next);
+    }
   }).bind(this);
 
   if (this._running) {
