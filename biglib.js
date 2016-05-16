@@ -325,7 +325,7 @@ biglib.prototype._on_start = function(config, control) {
 
   this._node.send([ null, { control: this._runtime_control }]);   
 
-  this._running = true; 
+  this._running = true;
 }
 
 // 
@@ -402,6 +402,7 @@ biglib.prototype.create_stream = function(msg, in_streams) {
 
   var input;
   var output;
+  var p;
 
   assert(this._runtime_control, "create_stream, no runtime_control");
 
@@ -419,7 +420,6 @@ biglib.prototype.create_stream = function(msg, in_streams) {
         output = output.pipe(s.call(this, my_config));
       }).bind(this));
 
-      var p;
       if (this.parser_stream) {
         output = output
           .pipe((p = this.parser_stream(this._extract_config(my_config, this.parser_config))))
@@ -457,7 +457,7 @@ biglib.prototype.create_stream = function(msg, in_streams) {
   }
 
   // Return is the entry point for incoming data
-  return { input: input, output: output };
+  return { input: input, output: output, parser: p };
 }
 
 //
@@ -526,7 +526,6 @@ biglib.prototype._enqueue = function(msg, input_stream, second_output) {
   var next = (function() {
     var elt = this._stack.pop();
     if (elt) {
-      this.log("Running next in queue");
       create(elt.msg, elt.input_stream, elt.second_output);
     }
   }).bind(this);
@@ -534,11 +533,11 @@ biglib.prototype._enqueue = function(msg, input_stream, second_output) {
   var create = (function(msg, input_stream, second_output) {
     var s = []; if (input_stream) s.push(input_stream);
     s.push(this._size_stream);
-    (ret = this.create_stream(msg, s, second_output)).output.on('finish', next);
+    (ret = this.create_stream(msg, s, second_output)).parser.on(this._finish_event, next);
   }).bind(this);
 
   if (this._running) {
-    this.log("Pushing...");
+    //this.log("Pushing...");
     this._stack.push({ msg: msg, input_stream: input_stream, second_output: second_output });
   } else {
     create(msg, input_stream, second_output);
@@ -687,7 +686,7 @@ biglib.prototype.main = function(msg) {
   // control message = block mode
   // already in block mode, go on
   if (msg.control || this._input_stream) {
-    //this.log("Block mode");
+    // this.log("Block mode");
     return this.stream_data_blocks(msg);
   }
 
@@ -700,7 +699,7 @@ biglib.prototype.main = function(msg) {
 
   if (msg[this._generator] || this._def_config[this._generator]) {
 
-    this.log("Generator mode " + this._generator + " - " + this._def_config[this._generator] + ".");
+    //this.log("Generator mode " + this._generator + " - " + this._def_config[this._generator] + ".");
 
     this._status_type = StatusTypeGenerator;
     this.set_generator_property(msg);
@@ -712,6 +711,10 @@ biglib.prototype.main = function(msg) {
         this.stream_file_blocks(msg);
         break;   
 
+      case 'limiter':
+        this._enqueue(msg);
+        break;
+
       default:
         throw new Error("Can't act as a data generator as property \"generator\" is unknown");
     }
@@ -720,7 +723,7 @@ biglib.prototype.main = function(msg) {
 
   }
 
-  //this.log("Standalone mode");
+  this.log("Standalone mode");
 
   // Classical mode, acts as a filter
   msg.control = { state: "standalone" }
