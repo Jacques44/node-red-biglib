@@ -102,6 +102,9 @@ function biglib(obj) {
       case 'records': 
         return function(running) { return (running ? "sending " : "done with ") + this._runtime_control.records + " record" + (this._runtime_control.records > 1 ? "s" : "") + (running ? " so far" : "") }
         break;
+      case 'orders': 
+        return function(running) { return (running ? "sending " : "done with ") + this._runtime_control.records + " order" + (this._runtime_control.records > 1 ? "s" : "") + (running ? " so far" : "") }
+        break;        
       default:
         if (typeof obj.status == "function") return obj.status;
         return function(running) { return (running ? "running" : "done") }
@@ -310,6 +313,8 @@ biglib.prototype._on_finish = function(err) {
 // Callback when the job stats
 //
 biglib.prototype._on_start = function(config, control) {
+
+  config = config || this.config();
 
   this._runtime_control.records = this._runtime_control.size = 0;
   this._runtime_control.start = new Date();
