@@ -723,8 +723,6 @@ biglib.prototype.main = function(msg) {
 
   }
 
-  this.log("Standalone mode");
-
   // Classical mode, acts as a filter
   msg.control = { state: "standalone" }
   this.stream_data_blocks(msg);
