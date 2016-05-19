@@ -66,6 +66,10 @@ function biglib(obj) {
   // This stack is used in case of multiple incoming "generator" messages. We don't want data from 2 files to be melt
   this._stack = [];
 
+  // Properties to propagate for all messages
+  this._templates = obj.templates || [ '_msgid', 'topic' ];
+
+  // Custom finish event
   this._finish_event = obj.finish_event || 'finish';
 
   // These control the refresh rates for visual statuses and running control messages
@@ -254,7 +258,10 @@ biglib.prototype._rated_status = function(msg) {
 biglib.prototype._control_rated_send = function(cb) {
   var now = Date.now();
   if (now - this._last_control_rated_send > this._runtime_control.config.control_rate || 0) {
-    this._node.send([ null, cb()]);
+
+    var msg = cb();
+    if (msg) this._node.send([ null, this._control_message(msg) ]);
+
     this._last_control_rated_send = now;
   }
 }      
@@ -301,8 +308,8 @@ biglib.prototype._on_finish = function(err) {
     this._node.status({fill: this._warn ? "yellow": "green", shape: this._status_type, text: this.progress(false) });
   }
 
-  this._node.send([ null, { control: this._runtime_control }]);
-
+  this._node.send([ null, this._control_message(this._runtime_control) ]);
+  
   if (err) {
     //console.log(err, err.stack.split("\n"))
     this._node.error(err);
@@ -314,6 +321,7 @@ biglib.prototype._on_finish = function(err) {
 //
 biglib.prototype._on_start = function(config, control) {
 
+  this._i = 0;
   config = config || this.config();
 
   this._runtime_control.records = this._runtime_control.size = 0;
@@ -328,7 +336,7 @@ biglib.prototype._on_start = function(config, control) {
   delete this._warn;
   this._runtime_control.rc = "running";
 
-  this._node.send([ null, { control: this._runtime_control }]);   
+  this._node.send([ null, this._control_message(this._runtime_control) ]);
 
   this._running = true;
 }
@@ -350,7 +358,9 @@ biglib.prototype._out_stream = function(my_config) {
     this._rated_status({fill: "blue", shape: this._status_type, text: this.progress(true) });
 
     // #1 big node principle: send blocks for big files management
-    this._node.send([{ payload: format(data) }]);
+    this._node.send([ this._data_message(format(data)) ]);
+
+    this._i++;
 
     done();
   }).bind(this);      
@@ -376,9 +386,8 @@ biglib.prototype._out_stream_n = function(my_config, n) {
   outstream._transform = (function(data, encoding, done) {
 
     // #1 big node principle: send blocks for big files management
-    var d = []; d[n] = { payload: format(data) };
-
-    this._node.send(d);
+    var d = []; d[n] = this._data_message(format(data));
+    this._node.send(d);    
 
     done();
   }).bind(this);      
@@ -399,6 +408,9 @@ biglib.prototype.merge_config = function(msg) {
 // Main stream pipes creator
 //
 biglib.prototype.create_stream = function(msg, in_streams) {
+
+  // msg is stored as a template for all messages
+  this._template_message(msg);
 
   var my_config = this.merge_config(msg).config;
 
@@ -436,7 +448,7 @@ biglib.prototype.create_stream = function(msg, in_streams) {
           this._on_finish(err);
         }.bind(this))
         .on('working', this.working.bind(this))
-        .on(this._finish_event, this._on_finish.bind(this));
+        .on(this._finish_event, this._on_finish.bind(this))
       }
 
       // finale pipe to the tranform stream binding the data to the node output (using node.send)
@@ -467,15 +479,16 @@ biglib.prototype.create_stream = function(msg, in_streams) {
 
 //
 // Build a running control status with speed informations
+// Returns a control value
 //
 biglib.prototype._speed_message = function() {
   var duration = moment.duration(moment().diff(this._runtime_control.start, 'seconds'));
 
-  if (duration > 0) {         
+  if (duration > 0) {
     this._runtime_control.speed = this._runtime_control.size / duration;
     this._runtime_control.state = 'running';
-    return { control: this._runtime_control };
-  }      
+    return this._runtime_control;
+  }
 }
 
 // 
@@ -649,13 +662,11 @@ biglib.prototype.stream_data_blocks = function(msg) {
 
     this._ready();
 
-    //if (msg.config) 
     this._input_stream = this.create_stream(msg, [ this._size_stream ]).input;
   }
 
   if (msg.payload) {
     assert(this._input_stream, "unexpected state");
-    // if (! this._input_stream) this._input_stream = this.create_stream(msg, [ this._size_stream ]).input;
 
     this._input_stream.write(msg.payload);
   }
@@ -663,8 +674,6 @@ biglib.prototype.stream_data_blocks = function(msg) {
   if (msg.control && (msg.control.state == "end" || msg.control.state == "standalone" || msg.control.state == "error")) {
 
     if (msg.control.state == "error") {
-      // Resend error message
-      //this._node.send([ null, msg ]);
       this._err = new Error(msg.control.error + " from upstream");
     }    
 
@@ -696,7 +705,7 @@ biglib.prototype.main = function(msg) {
   // control message = block mode
   // already in block mode, go on
   if (msg.control || this._input_stream) {
-    // this.log("Block mode");
+    //this.log("Block mode");
     return this.stream_data_blocks(msg);
   }
 
@@ -763,8 +772,7 @@ biglib.min_finish = function(stats) {
   else if (config.minWarning && stats.rc >= config.minWarning) this.set_warning();
 };
 
-biglib.dummy_writable = function(needed) {
-  if (!needed) return;
+biglib.dummy_writable = function() {
   // Build a dummy stream that discards input message. If not in objectMode, throws typeError: Invalid non-string/buffer chunk if 
   // receiving a timestamp
   dummy = new require('stream').Writable({ objectMode: true });
@@ -796,6 +804,30 @@ biglib.stringify_stream = function() {
     done();
   }
   return ret;
+}
+
+// Return an empty message to be filled with data
+biglib.prototype._empty_message = function() {
+  return Object.assign({}, this._msg || {});
+}
+
+biglib.prototype._control_message = function(data) {
+  var m = this._empty_message();
+  m.control = data;
+  return m;
+}
+
+biglib.prototype._data_message = function(data) {
+  var m = this._empty_message();
+  m.payload = data;
+  return m;  
+}
+
+biglib.prototype._template_message = function(msg) {
+  this._msg = {}; 
+  Object.keys(this._templates).forEach(function(k, i) {
+    if (msg.hasOwnProperty(k)) this._msg[k] = msg[k];
+  })
 }
 
 module.exports = biglib;
