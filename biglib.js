@@ -666,7 +666,8 @@ biglib.prototype.stream_data_blocks = function(msg) {
   }
 
   if (msg.payload) {
-    assert(this._input_stream, "unexpected state");
+
+    if (!this._input_stream) return this._on_finish(new Error("Unexpected state, incoming data and no stream"))
 
     this._input_stream.write(msg.payload);
   }
@@ -675,7 +676,7 @@ biglib.prototype.stream_data_blocks = function(msg) {
 
     if (msg.control.state == "error") {
       this._err = new Error(msg.control.error + " from upstream");
-    }    
+    }
 
     this._runtime_control.control = msg.control;    // Parent control message
 
@@ -792,14 +793,14 @@ biglib.prototype.filesize = function() {
   return filesize(this._runtime_control.size);
 }
 
-biglib.stringify_stream = function() {
+biglib.stringify_stream = function(eol) {
   var ret = new stream.Transform({ objectMode: true });
   ret._transform = function(data, encoding, done) {
     // Stringify
     if (typeof data == 'object') {
-      this.push(JSON.stringify(data));
+      this.push(JSON.stringify(data) + eol);
     } else {
-      this.push(data.toString());
+      this.push(data.toString() + eol);
     }
     done();
   }
