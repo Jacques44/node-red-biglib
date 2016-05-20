@@ -67,7 +67,7 @@ function biglib(obj) {
   this._stack = [];
 
   // Properties to propagate for all messages
-  this._templates = obj.templates || [ '_msgid', 'topic' ];
+  this._templates = obj.templates || [ '_msgid', 'topic', '__combineId' ];
 
   // Custom finish event
   this._finish_event = obj.finish_event || 'finish';
