@@ -825,10 +825,11 @@ biglib.prototype._data_message = function(data) {
 }
 
 biglib.prototype._template_message = function(msg) {
-  this._msg = {}; 
-  Object.keys(this._templates).forEach(function(k, i) {
-    if (msg.hasOwnProperty(k)) this._msg[k] = msg[k];
+  var _msg = {}; 
+  this._templates.forEach(function(k, i) {
+    if (msg.hasOwnProperty(k)) _msg[k] = msg[k];
   })
+  this._msg = _msg;
 }
 
 module.exports = biglib;
