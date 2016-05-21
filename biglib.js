@@ -676,7 +676,8 @@ biglib.prototype.stream_data_blocks = function(msg) {
   if (msg.control && (msg.control.state == "end" || msg.control.state == "standalone" || msg.control.state == "error")) {
 
     if (msg.control.state == "error") {
-      this._err = new Error(msg.control.error + " from upstream");
+      //if (msg.control.error instanceof Error && msg.control.error.message.endsWith("from upstream")) this._err = msg.control.error; 
+      //else this._err = new Error(msg.control.error.message + " from upstream");
     }
 
     this._runtime_control.control = msg.control;    // Parent control message
