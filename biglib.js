@@ -240,7 +240,7 @@ biglib.prototype.working = function(text) {
   this._node.status({fill: "blue", shape: this._status_type, text: text});
 }
 
-biglib.prototype.stats = function(stats) {  
+biglib.prototype.stats = function(stats) { 
   for (k in stats) {
     this._runtime_control[k] = stats[k];    
   }
@@ -334,7 +334,8 @@ biglib.prototype._on_start = function(config, control) {
   this._runtime_control.message = "running...";
   delete this._err;
   delete this._warn;
-  this._runtime_control.rc = "running";
+  delete this._runtime_control.rc;
+  delete this._runtime_control.ok;
 
   this._node.send([ null, this._control_message(this._runtime_control) ]);
 
@@ -769,8 +770,15 @@ biglib.argument_to_string = function(arg) {
 
 biglib.min_finish = function(stats) {  
   var config = this._runtime_control.config;
-  if (config.minError && stats.rc >= config.minError) this.set_error(new Error("Return code " + stats.rc)); 
-  else if (config.minWarning && stats.rc >= config.minWarning) this.set_warning();
+  if (!stats.hasOwnProperty('rc')) stats.rc = 255;
+  if (config.minError && stats.rc >= config.minError) {
+    this.set_error(new Error("Return code " + stats.rc));
+    this.stats({ ok: false });
+  }
+  else {
+    this.stats({ ok: true });
+    if (config.minWarning && stats.rc >= config.minWarning) this.set_warning();
+  }
 };
 
 biglib.dummy_writable = function() {
