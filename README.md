@@ -1,6 +1,6 @@
 # node-red-biglib
 
-"Big Lib" is the core library for "Big Nodes" I've made to contribute to the node-red node library. This library is used by nodes such as [big file](https://github.com/Jacques44/node-red-contrib-bigfile), [big csv](https://github.com/Jacques44/node-red-contrib-bigcsv) and [big line](https://github.com/Jacques44/node-red-contrib-bigline)
+"Big Lib" is the core library for "Big Nodes"
 
 This library 
 
@@ -11,21 +11,26 @@ npm install node-red-biglib
 
 ## Principles for Big Nodes
 
-###1 can handle big data or block mode
+See [biglib](https://www.npmjs.com/package/node-red-biglib) for details on Big Nodes.
+`Big Lib` and subsequent `Big Nodes` are a family of nodes built for my own purpose. They are all designed to help me build a complete process for **production purposes**. For that I needed nodes able to:
 
-  That means, in block mode, not only "one message is a whole file" and able to manage start/end control messages
+* Flow **big volume** of data (memory control, work with buffers)
+* Work with *a flow of blocks* (buffers) (multiple payload within a single job)
+* Tell what *they are doing* with extended use of statuses (color/message)
+* Use their *second output for flow control* (start/stop/running/status)
+* *Reuse messages* in order to propagate _msgid, topic
+* Depends on **state of the art** libraries for parsing (csv, xml, xlsxs, line, ...)
+* Acts as **filters by default** (1 payload = 1 action) or **data generators** (block flow)
 
-###2 send start/end messages as well as statuses
+All functionnalities are built under a library named `biglib` and all `Big Nodes` rely on it
 
-  That means it uses a second output to give control states (start/end/running and error) control messages
+## The Big Nodes family
 
-###3 tell visually what they are doing
+This library is used for big nodes developpement.
 
-  Visual status on the node tells it's ready/running (blue), all is ok and done (green) or in error (red)
+Here is the family
 
-## Usage
-
-This library is only used for node developpement.
+![alt tag](https://cloud.githubusercontent.com/assets/18165555/15454010/bd400bdc-202b-11e6-887f-786bcbb425a7.png)
 
 ## Dependencies
 
@@ -37,7 +42,19 @@ This library is only used for node developpement.
 
 ## API
 
-Work in progress. Please look at [big file](https://github.com/Jacques44/node-red-contrib-bigfile), [big csv](https://github.com/Jacques44/node-red-contrib-bigcsv) and [big line](https://github.com/Jacques44/node-red-contrib-bigline) for examples 
+Work in progress. Please look at `Big Nodes`
+
+* [big file](https://github.com/Jacques44/node-red-contrib-bigfile) for reading files in multiple ways/format/encoding
+* [big csv](https://github.com/Jacques44/node-red-contrib-bigcsv) for parsing CSV
+* [big line](https://github.com/Jacques44/node-red-contrib-bigline) for parsing by lines
+* [big fixed](https://github.com/Jacques44/node-red-contrib-bigfixed) for fixed format parsing
+* [big status](https://github.com/Jacques44/node-red-contrib-bigstatus) for visual statuses
+* [big exec](https://github.com/Jacques44/node-red-contrib-bigexec) for executing commands
+* [big ssh](https://github.com/Jacques44/node-red-contrib-bigssh) for executing remote command over SSH
+* [big mongo](https://github.com/Jacques44/node-red-contrib-bigmongo) fork from node-red-contrib-mongodb2 for executing MongoDB requests with cursor support
+* [big db2](in progress)
+* [big xlsx](https://github.com/Jacques44/node-red-contrib-bigxlsx) for parsing XLSX files
+* [big splitter](https://github.com/Jacques44/node-red-contrib-bigsplitter) fork from node-red-contrib-splitter with big control support
 
 ## Author
 
