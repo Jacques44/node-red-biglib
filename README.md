@@ -2,8 +2,6 @@
 
 "Big Lib" is the core library for "Big Nodes"
 
-This library 
-
 ## Installation
 ```bash
 npm install node-red-biglib
@@ -52,9 +50,10 @@ Work in progress. Please look at `Big Nodes`
 * [big exec](https://github.com/Jacques44/node-red-contrib-bigexec) for executing commands
 * [big ssh](https://github.com/Jacques44/node-red-contrib-bigssh) for executing remote command over SSH
 * [big mongo](https://github.com/Jacques44/node-red-contrib-bigmongo) fork from node-red-contrib-mongodb2 for executing MongoDB requests with cursor support
-* [big db2](in progress)
+* [big db2]() in progress
 * [big xlsx](https://github.com/Jacques44/node-red-contrib-bigxlsx) for parsing XLSX files
 * [big splitter](https://github.com/Jacques44/node-red-contrib-bigsplitter) fork from node-red-contrib-splitter with big control support
+* [big tail](https://github.com/Jacques44/node-red-contrib-bigtail) used for converting multiple payloads in one message with line and size constraints
 
 ## Author
 
