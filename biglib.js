@@ -834,11 +834,15 @@ biglib.prototype._data_message = function(data) {
 }
 
 biglib.prototype._template_message = function(msg) {
+  // new message
   var _msg = {}; 
-  this._templates.forEach(function(k, i) {
-    if (msg.hasOwnProperty(k)) _msg[k] = msg[k];
-  })
-  this._msg = _msg;
+  // clone
+  Object.assign(_msg, msg);
+  // internal messages
+  delete msg.control;
+  delete msg.config;
+  // this is it
+  this._msg = msg;
 }
 
 module.exports = biglib;
