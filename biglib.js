@@ -605,7 +605,7 @@ biglib.prototype.stream_data_lines = function(msg) {
     var config_file = this._extract_config(my_config, file_options);
 
     try {    
-      return fs.createReadStream(my_config.filename, config_file.encoding);
+      return fs.createReadStream(my_config.filename, { encoding: config_file.encoding, start: my_config.start, end: my_config.end});
     } catch (err) {
       this._on_finish(err);
     }      

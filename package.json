@@ -1,6 +1,6 @@
 {
   "name": "node-red-biglib",
-  "version": "1.3.3",
+  "version": "1.3.4",
   "description": "library for building node-red flows that supports blocks, high volume",
   "main": "biglib.js",
   "scripts": {
